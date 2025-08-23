@@ -1,0 +1,151 @@
+\ProvidesFile{BuiltInTypes.tex}[Встроенные типы]
+
+
+\section{Встроенные типы}
+
+%\subsection{Общие слова}
+% TO DO
+
+\subsection{bool}
+
+Данный тип используется только для вычисления истинности логических выражений и ни для чего больше.
+Вот несколько важных пунктов, которые проясняют смысл этого общего заявления
+\begin{enumerate}
+\item Если вам надо проверить какое-то сложное условие и вы хотите завернуть его в функцию, то эта функция должна возвращать \verb"bool".
+Например
+\begin{cppcode}
+bool is_prime(int);
+bool has_element(key);
+\end{cppcode}
+Если функция возвращает \verb"bool", то ее название обязательно содержит глагол is или has.%
+\footnote{Я в курсе про STL \verb"empty" и прочие методы, это печаль.}
+Если вы не можете сформулировать название функции в таком виде, то скорее всего вы не должны возвращать \verb"bool".
+Вот хороший пример.
+Есть тесты целых чисел на простоту, которые либо определяют, что число было составным, либо они не знают ответ, например тест Ферма.
+Есть желание вернуть \verb"bool" из функции, которая проводит тест Ферма:
+\begin{cppcode}
+bool run_fermat_test(int);
+\end{cppcode}
+Проблема с этим решением видна сразу по названию.
+Из названия функции не ясно, что значит \verb"true" или \verb"false".
+Мы можем переформулировать название как-нибудь в духе <<проходит ли тест Ферма>>, но реальное решение заключается в том, что вместо \verb"bool", мы хотим вернуть статус проверки и статус может быть либо \verb"Prime" либо \verb"ProbablyPrime".
+Потому тут лучше завести \verb"enum class" с нормальными именами статуса и возвращать его
+\begin{cppcode}
+enum class Status : unsigned char {
+  Prime, ProbablyPrime
+};
+
+Status run_fermat_test(int);
+\end{cppcode}
+И теперь вы не можете просто подставить статус внутрь \verb"if", вам придется тестировать результат с использованием говорящих имен
+\begin{cppcode}
+Status test_status = run_fermat_test(107);
+
+if (test_status == Status::Prime)
+  // do something
+\end{cppcode}
+
+\item Никогда НЕ принимайте аргументы функции в виде \verb"bool".
+Если вам кажется, что это хорошая идея, то давайте посмотрим на несколько примеров
+\begin{cppcode}
+void set_visibility(bool is_visible);
+\end{cppcode}
+И на стороне пользователя функции
+\begin{cppcode}
+set_visibility(true);
+\end{cppcode}
+Последний вызов даже не так плох, тут можно даже догадаться, что означает значение \verb"true".
+Тем не менее, чтобы уточнить, вам все же придется глянуть на заголовок функции.
+Но что если в h файле функция написана так
+\begin{cppcode}
+void set_visibility(bool);
+\end{cppcode}
+Уже хуже.
+А cpp может быть недоступен, да и не дело это лезть читать имплементацию, чтобы пользоваться функцией.
+Но бывают ситуации еще лучше.
+Вот скажите, что тут значит \verb"true":%
+\footnote{Первые две магические константы тоже не сильно понятны из вызова кода, но наверное это хотя бы разрешение.
+Это тоже не лучшее решение.
+Как с этим бороться рассказано в разделе~\ref{section::CtorArgs} пункт~\ref{item::CtorArgs}.}
+\begin{cppcode}
+Renderer renderer(600, 800, true);
+\end{cppcode}
+Или вот тут
+\begin{cppcode}
+WidgetList list(true);
+\end{cppcode}
+В таких ситуациях надо завести \verb"enum class" с нормальными названиями.
+Вот как могла разрешиться ситуация выше
+\begin{cppcode}
+Renderer renderer(600, 800, Mode::WireFrame);
+WidgetList list(Ownership::Enable);
+\end{cppcode}
+Кроме того, если у вас используется \verb"bool", то у вас только два возможных значения, а их может быть потенциально очень много.
+
+\item Никогда НЕ храните в классах и структурах \verb"bool" переменные.
+Проблема тут такая же как и в предыдущем пункте -- на стороне пользователя будет тяжело понять, что значит присваивание \verb"true" или \verb"false".
+Куда лучше завести \verb"enum class" а-ля Статус и использовать хорошие имена для статуса.
+Например, если вы хотите пройтись по дереву собранному на нодах с указателями и пометить вершину, как посещенную, то есть соблазн сделать так
+\begin{cppcode}
+struct Node {
+  Data data;
+  bool is_visited = false;
+  Node* parent = nullptr;
+  Node* left = nullptr;
+  Node* right = nullptr;
+};
+\end{cppcode}
+Однако, при инициализации можно написать так
+\begin{cppcode}
+Node node{Data(), true};
+\end{cppcode}
+Что не помогает чтению.
+Несколько спасает возможность указать имя инициализируемого члена.
+Куда лучше сделать \verb"enum class" и написать
+\begin{cppcode}
+enum class Status : unsigned char {
+  NotVisited, Visited
+};
+
+struct Node {
+  Data data;
+  Status status = Status::NotVisited;
+  Node* parent = nullptr;
+  Node* left = nullptr;
+  Node* right = nullptr;
+};
+\end{cppcode}
+Дополнительный плюс этого подхода заключается в том, что теперь можно много разных флагов хранить в одной переменной и не тратить по одному байту на разные свойства.
+Для этого полезно будет перегрузить операторы \verb"operator|", \verb"operator|=", \verb"operator&" и \verb"operator&=" для побитовых операций и получится%
+\footnote{Если вы поддерживаете побитовые операции, то обязательно укажите, что ваш \verb"enum class" имеет беззнаковый подлежащий тип.
+Потому что для знаковых типов побитовые операции часто UB.
+Лучше не играть с этим.}
+\begin{cppcode}
+enum class Status : unsigned char {
+  None = 0,
+  Visited = 1,
+  Leaf = 2,
+  Bad = 4
+};
+
+Status& operator|=(Status& lhs, Status rhs);
+Status& operator&=(Status& lhs, Status rhs);
+Status operator|(Status lhs, Status rhs);
+Status operator&(Status lhs, Status rhs);
+
+struct Node {
+  Node* parent = nullptr;
+  Node* left = nullptr;
+  Node* right = nullptr;
+  Data data;
+  Status status = Status::None;
+};
+\end{cppcode}
+И теперь можно создавать вершину так
+\begin{cppcode}
+Node node{.data = Data(), .status = Status::Visited | Status::Leaf};
+\end{cppcode}
+Если использовать имена полей структуры, то не важно в каком порядке они идут в структуре и в списке инициализации.
+\end{enumerate}
+
+%\subsection{Знаковые и беззнаковые типы}

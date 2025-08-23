@@ -1,0 +1,285 @@
+\ProvidesFile{Semantics.tex}[Семантика]
+
+
+\section{Семантика языка}
+\label{section::Semantics}
+
+Вопрос семантики -- вопрос как интерпретировать присваивание в языке.
+Есть два подхода:
+\begin{enumerate}
+\item Value Semantics.
+\item Reference Semantics.
+\end{enumerate}
+Давайте начнем с первой.
+В ней надо думать про переменные, как стаканы содержащие данные.
+А присваивание -- это перекладывание данных.
+\[
+\xymatrix@R=15pt@C=15pt{
+{}&{}&{\square}\ar@{|->}@/_10pt/[lld]+(0,4)\\
+{\square}
+{\save
+[].[]*+[F--]\frm{}
+\restore}
+&{=}&{\boxtimes}\ar@{|->}[u]
+{\save
+[].[]*+[F--]\frm{}
+\restore}
+}
+\]
+И тут есть две вариации.
+Данные могут копироваться.
+Например, модель присваивания C++
+\[
+\begin{aligned}
+\xymatrix@R=15pt@C=15pt{
+{}&{}&{\square}\\
+{\phantom{\boxtimes}}
+{\save
+[].[]*+[F--]\frm{}
+\restore}
+&{=}&{\boxtimes}\ar@{|->}[u]
+{\save
+[].[]*+[F--]\frm{}
+\restore}
+}
+\end{aligned}
+\quad\Rightarrow\quad
+\begin{aligned}
+\xymatrix@R=15pt@C=15pt{
+{}&{}&{\boxtimes}\ar@{|->}@/_10pt/[lld]+(0,4)\\
+{\square}
+{\save
+[].[]*+[F--]\frm{}
+\restore}
+&{=}&{\boxtimes}
+{\save
+[].[]*+[F--]\frm{}
+\restore}
+}
+\end{aligned}
+\quad\Rightarrow\quad
+\begin{aligned}
+\xymatrix@R=15pt@C=15pt{
+{}&{}&{\phantom{\boxtimes}}\\
+{\boxtimes}
+{\save
+[].[]*+[F--]\frm{}
+\restore}
+&{=}&{\boxtimes}
+{\save
+[].[]*+[F--]\frm{}
+\restore}
+}
+\end{aligned}
+\]
+Или же данные могут перемещаться.
+Например, модель присваивания Rust
+\[
+\begin{aligned}
+\xymatrix@R=15pt@C=15pt{
+{}&{}&{\square}\\
+{\phantom{\boxtimes}}
+{\save
+[].[]*+[F--]\frm{}
+\restore}
+&{=}&{\boxtimes}\ar@{|->}[u]
+{\save
+[].[]*+[F--]\frm{}
+\restore}
+}
+\end{aligned}
+\quad\Rightarrow\quad
+\begin{aligned}
+\xymatrix@R=15pt@C=15pt{
+{}&{}&{\boxtimes}\ar@{|->}@/_10pt/[lld]+(0,4)\\
+{\square}
+{\save
+[].[]*+[F--]\frm{}
+\restore}
+&{=}&{\phantom{\boxtimes}}
+{\save
+[].[]*+[F--]\frm{}
+\restore}
+}
+\end{aligned}
+\quad\Rightarrow\quad
+\begin{aligned}
+\xymatrix@R=15pt@C=15pt{
+{}&{}&{\phantom{\boxtimes}}\\
+{\boxtimes}
+{\save
+[].[]*+[F--]\frm{}
+\restore}
+&{=}&{\phantom{\boxtimes}}
+{\save
+[].[]*+[F--]\frm{}
+\restore}
+}
+\end{aligned}
+\]
+Важное свойство такого подхода -- изменение данных в одном стакане никак не может повлиять на данные в другом.
+Для элементарных типов такое поведение достигается тем, что они хранятся в разных областях памяти.
+Однако, value semantics не означает, что это всегда так.
+Например \verb"shared_ptr" на константный объект, тоже обладает value semantics.
+Подумайте про работу с целыми числами в Python.
+Вы ни за что не отличите ее от работы с целыми числами в C++.
+Вы можете думать про такие переменные как стаканы с данными и все будет работать.
+Причина в том, что в Python целые числа всегда константы и присваивание просто перевешивает ссылку на объект с новым значением, не меняя старого.
+Вы не можете вызвать ни одного метода у целых чисел, который бы их изменил.
+
+
+В языках вроде Python, Java, C\# и прочих переменные -- это имена указывающие на данные, потому присваивание интерпретируется по-другому.
+Присваивание $x = y$ означает: <<называй именем $x$ то, что называется именем $y$>>.
+Модель присваивания в Python можно представлять себе так: 
+\[
+\begin{aligned}
+\xymatrix@R=15pt@C=15pt{
+{x}&{=}&{y}\ar[dl]\\
+{}&{\boxtimes}&{}
+}
+\end{aligned}
+\quad\Rightarrow\quad
+\begin{aligned}
+\xymatrix@R=15pt@C=15pt{
+{x}\ar[dr]&{=}&{y}\ar[dl]\\
+{}&{\boxtimes}&{}
+}
+\end{aligned}
+\]
+Очень важно понимать, что value semantics safe by default.
+А вот reference semantics -- контр интуитивная штука.
+
+\paragraph{Тест на интуицию}
+
+Предположим, нам дана матрица
+\[
+A = 
+\begin{pmatrix}
+{0}&{1}\\
+{1}&{0}
+\end{pmatrix}
+\]
+И пусть у нас выполнен следующий код
+\begin{pythoncode}
+MatA = ...
+# = A
+
+print(Determinant(MatA))
+print(Determinant(MatA))
+\end{pythoncode}
+Что выдаст эта программа?
+Наша интуиция подсказывает, что должно быть $-1, -1$.
+Однако, программа выдаст $-1, 1$.
+Какая ваша первая мысль?
+Наверное есть баг в \verb"Determinant".
+Каково же будет ваше удивление, когда вы проверите и убедитесь, что \verb"Determinant" работает полностью корректно.
+Проблема в том, что \verb"Determinant" изменяет матрицу \verb"MatA", когда вычисляет определитель гауссом.
+Из-за этого во втором вызове у нас будет лежать единичная матрица.
+Вот такая гадость.
+Проблема в том, что человеческому сознанию сложно мыслить ссылками.
+Мы мыслим значениями.
+Потому мы не ожидаем такого поведения в этом коде.
+И это главная проблема Python.
+У этого подхода есть и плюсы, но value semantics я все таки люблю больше.
+По сути, в reference semantics языках переменные -- это \verb"shared_ptr" на не обязательно константные объекты.
+И если вы читали выше раздел~\ref{section::Dangerous} пункт~\ref{item::SharedPtr} то знаете, почему чем они опасны.
+Так же рекомендую почитать раздел~\ref{section::SharedPtr} посвященный \verb"shared_ptr".
+
+Давайте посмотрим с точки зрения семантики на следующие типы.
+Я их специально поделил на типы с value semantics и reference semantics:
+\begin{center}
+\begin{tabular}{cc}
+{\bf Value Semantics}&{\bf Reference Semantics}\\
+
+{
+\begin{minipage}[\baselineskip]{8cm}
+\begin{cppcode}[numbers=none, linewidth=8cm]
+char x;
+A x;
+
+const char& x; // almost
+const A& x; // almost
+
+const char* x; // almost
+const A* x; // almost
+
+std::unique_ptr<char> x;
+std::unique_ptr<A> x;
+
+std::shared_ptr<const char> x;
+std::shared_ptr<const A> x;
+\end{cppcode}
+\end{minipage}
+}&{
+\begin{minipage}[\baselineskip]{8cm}
+\begin{cppcode}[numbers=none, linewidth=8cm]
+
+
+
+char& x;
+A& x;
+
+char* x;
+A* x;
+
+
+
+
+std::shared_ptr<char> x;
+std::shared_ptr<A> x;
+\end{cppcode}
+\end{minipage}
+}
+\end{tabular}
+\end{center}
+Обратите внимание, что константные ссылки и указатели помечены, что они почти являются value semantics.
+Дело тут вот в чем, если гарантируется, что в течение времени жизни ссылки или указателя объект будет жив, то тогда действительно мы имеем value semantics.
+Например такие гарантии есть если
+\begin{enumerate}
+\item Строковые константы
+\begin{cppcode}
+const char* msg = "Hellow World!";
+\end{cppcode}
+Глобальные константы живут в статической памяти в течение времени жизни всей программы и потому к ним безопасно получать доступ.
+
+\item Передача аргументов в функцию по константной ссылке.
+У любого временного объекта, который подставляется вместо такого аргумента life-time продливается до конца вызова функции.
+Например
+\begin{cppcode}
+struct A {
+  const int& value() const {
+    return value;
+  }
+  int value;
+};
+
+void f(const int& value);
+
+int main() {
+  f(A().x); // is OK
+  f(A().value()); // is OK
+}
+\end{cppcode}
+Однако, стоит иметь в виду, что функции в этом плане очень особенные.
+И стоит помнить вот такой пример
+\begin{cppcode}
+struct A {
+  const int& value() const {
+    return value;
+  }
+  int value;
+};
+
+int main() {
+  const int& x = A().value; // is OK
+  std::cout << x << '\n'; // is OK
+  const int& y = A().value(); // is BAD
+  std::cout << y << '\n'; // y is dangling reference
+}
+\end{cppcode}
+Если мы говорим об обычных ссылках, то время жизни временной структуры продлевается, если мы биндим ссылку на поле этой структуры (например строки 1 и 2 выше).
+Однако, если же мы ссылку возвращаем каким-то опосредованным методом, например через метод (строка 3), то life-time для временного объекта не продолжается и в 4 строке у нас \verb"y" является dangling reference, которая уже не ссылается на живой объект.
+\end{enumerate}
+
+\paragraph{ВАЖНО} Код должен быть написан в value semantics всегда.
+Тут полезно понимать, как переделать код со ссылками и указателями, чтобы он стал в value semantics и при этом не потерял в производительности и не стал жрать больше памяти, но этому надо будет научиться всего лишь один раз, а код будет лучше всегда.
