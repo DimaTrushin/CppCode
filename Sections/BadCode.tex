@@ -948,6 +948,127 @@ Network n = b.extract();
 \label{section::WrongWork}
 % TO DO
 
+\paragraph{Чтение из файла}
+
+Пусть у вас есть класс \verb"Picture", который некоторым образом работает с изображением.
+Теперь вы хотите добавить возможность читать картинки из файла и писать их в файл.
+Часто вижу, как люди добавляют конструкторы и функции записи так:
+\begin{cppcode}
+class Picture {
+public:
+  Picture(std::filesystem::path file);
+  void write(std::filesystem::path file);
+  ...
+  /*public interface*/
+private:
+  /*Implementation*/
+};
+\end{cppcode}
+Проблемы с таким подходом заключаются в том, что внезапно класс \verb"Picture", задача которого обрабатывать, скажем, растровое изображение, начинает разбираться в файловых системах, форматах файлов, парсинге и прочих странных вещах, которые не имеют отношения к его сути.
+Особенно эту проблему тяжело заметить, если конструктор и метод записи короткие функции, которые легко имплементировать.
+Но так бывает не всегда.
+Если вы начинаете добавлять новые форматы, то у вас может получиться такая вот фигня
+\begin{cppcode}
+class Picture {
+public:
+  Picture(std::filesystem::path file) {
+    switch(format_of(file)) {
+      case BMP:
+        read_bmp(file);
+        break;
+      case JPG:
+        read_jpg(file);
+        break;
+        ...
+      default:
+    }
+  }
+  void write(std::filesystem::path file);
+  ...
+  /*public interface*/
+private:
+  void read_bmp(std::filesystem::path file);
+  void read_jpg(std::filesystem::path file);
+  ...
+  /*Implementation*/
+};
+\end{cppcode}
+И вот тут становится видно, что какого-то черта ваш класс содержит вспомогательные функции, которые не относятся к его сути.
+Другой признак, что что-то пошло не так -- список \verb"#include" директив.
+Вы увидите, что файл с классом \verb"Picture" почему-то начинает включать в себя совсем не относящиеся к нему заголовочные файлы посвященные файловой системе.
+
+Мы уже обсуждали в разделе~\ref{section::Serialization}, как выносить из класса эту работу.
+Но я кратко напомню, что должен быть отдельный класс отвечающий за чтение и запись (может быть два класса: один для чтения, другой для записи).
+А для удобства, его вызов можно спрятать в статический метод или глобальную функцию так.
+\begin{cppcode}
+// some other header
+class FileWriter {/*Implementation*/};
+class FileReader {/*Implementation*/};
+
+//Picture.h
+class Picture {
+public:
+  ...
+  static Picture fromBMP(std::filesystem::path file);
+  static Picture fromJPG(std::filesystem::path file);
+private:
+  /*Implementation*/
+};
+
+//Picture.cpp
+// includes for FileWriter and FileReader
+Picture fromBMP(std::filesystem::path file) {
+  FileReader r(file);
+  return r.readBMP<Picture>();
+}
+
+Picture fromJPG(std::filesystem::path file) {
+  FileReader r(file);
+  return r.readJPG<Picture>();
+}
+\end{cppcode}
+Так же приимплементации \verb"FileReader" если вам понадобится сложная задача парсинга, то выделите для этого отдельный класс.
+Или даже много классов: по одному под каждый формат файла.
+Не делайте всю работу в одном месте и сразу, особенно если она вообще не относится к сути класса.
+
+\paragraph{\texttt{std::string}}
+
+Стандартные строки -- это пример плохого класса.
+Давайте посмотрим на список методов этого класса, начиная с модифицирующих методов.
+\begin{multicols}{3}
+\begin{enumerate}
+\item \texttt{clear}
+\item \texttt{insert}
+\item \texttt{insert\_range}
+\item \texttt{erase}
+\item \texttt{push\_back}
+\item \texttt{pop\_back}
+\item \texttt{append}
+\item \texttt{append\_range}
+\item \texttt{operator+=}
+\item \texttt{replace}
+\item \texttt{replace\_with\_range}
+\item \texttt{copy}
+\item \texttt{resize}
+\item \texttt{resize\_and\_overwrite}
+\item \texttt{swap}
+\item \texttt{find}
+\item \texttt{rfind}
+\item \texttt{find\_first\_of}
+\item \texttt{find\_first\_not\_of}
+\item \texttt{find\_last\_of}
+\item \texttt{find\_last\_not\_of}
+\item \texttt{compare}
+\item \texttt{starts\_with}
+\item \texttt{ends\_with}
+\item \texttt{contains}
+\item \texttt{substr}
+\end{enumerate}
+\end{multicols}
+В особенности мне нравятся последние несколько функций с \verb"find" в названии.
+Эти алгоритмы можно вызвать с помощью стандартной библиотеки на любом контейнере.
+Зачем они находятся внутри класса строки -- загадка для всех.
+
 \subsection{Плохо продуманные интерфейсы}
 \label{section::BadInterfaces}
 
