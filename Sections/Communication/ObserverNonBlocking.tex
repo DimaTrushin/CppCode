@@ -1,0 +1,825 @@
+\ProvidesFile{ObserverNonBlocking.tex}[Неблокирующий Observer]
+
+
+\subsection{Неблокирующий Observer Pattern}
+\label{section::ObserverNonBlocking}
+
+\subsubsection{Общая схема}
+
+Для неблокирующего observer pattern нам прежде всего нужна некоторая Message Driven System, которая будет использоваться для пересылки сообщений.
+Грубо общую модель можно описать следующей диаграммой.
+
+\[
+\xymatrix{
+  {\vphantom{\text{Message System}}}
+    {\save
+  [].[rr]*+[F--]\frm{}
+  \restore
+  }  
+  &{\text{Message System}}\ar[rd]\ar[rdd]&{}\\
+  {\text{Observable}}\ar[ru]<-0.5em>\ar[ru]&{}&{\text{Observer0}}\\
+  {}&{}&{\text{Observer1}}\\
+}
+\]
+В рамках такой системы \verb"Observable" не дергает методы \verb"Observer" напрямую.
+Вместо этого он посылает данные в виде сообщения каждому \verb"Observer"-у.
+Давайте отметим несколько интересных изменений, которые возникают из-за такой системы.
+\begin{itemize}
+\item Прежде всего, нужен механизм адресации для того, чтобы можно было отправлять сообщения конкретным объектам.
+Обычно в любой Message Driven System такая возможность имеется из коробки и тут не надо ничего изобретать.
+
+\item В зависимости от возможностей Message Driven System-ы бывает нужно уметь проверять жив ли объект, которому отправляется сообщение.
+Причем жив ли он не в момент отправки, а в момент доставки сообщения.
+Например в системе Qt таких гарантий нет.
+
+\item Так как сообщения посылаются разными сообщениями каждый своему адресату, то не возможно пересылать данные по ссылке.
+Приходится в каждое сообщение от \verb"Observable" вкладывать копию данных, которые надо пересылать.
+
+\item Когда же сообщение доставляется \verb"Observer", то мы гарантируем, что получатель ровно один и больше сообщение не понадобится.
+В этом случае данные можно безболезненно вынуть (мувнуть) из сообщения.
+
+\item Обратите внимание, что общение между \verb"Observer" и \verb"Observable" теперь происходит не мгновенно блокирующим образом, а с задержками.
+Они не реагируют друг на друга мгновенно.
+В этом случае можно думать, что общение портов происходит как бы через сеть.
+А все сетевое взаимодействие принято описывать с помощью State Machine.
+\end{itemize}
+Важно помнить, что конкретная имплементация зависит от выбора Message Driven System, от ее возможностей и предоставляемых гарантий.
+
+\subsubsection{Передача данных поверх Qt}
+
+\paragraph{Дефекты Qt}
+
+Начать я хочу с важного замечания по поводу системы Qt.
+Когда \verb"QApplication" доставляет сообщения адресатам
+\[
+\xymatrix{
+  {\verb"QApplication"}\ar[rr]^{\verb"event"}&{}&{\verb"QObject"}\\
+}
+\]
+он дергает блокирующим образом метод \verb"event" по адресу объекта получателя.
+Однако, нет никаких гарантий, что объект, у которого мы дергаем \verb"event" еще жив.
+Вокруг этой проблемы есть огромное количество костылей в Qt, включая отложенное удаление объекта.
+Получается, что в Qt экосистеме нельзя просто так слать сообщение \verb"QObject" напрямую.
+Нужно перед дерганьем метода \verb"event" проверить жив ли объект.
+И в Qt есть специальный следящий указатель (который по сути является другой имплементацией следящего указателя из раздела~\ref{section::TrackingPtr}) и называется он \verb"QPointer".
+Так же важно, что объект \verb"QApplication" всегда жив (на основном thread-е конечно).
+Тогда правильная схема -- отправить сначала сообщение \verb"QApplication" на своем thread-е.
+Если получатель живет на этом же thread-е, то \verb"QApplication" в начале проверяет жив ли адресат и после этого дергает у него \verb"event".
+Если же нужно послать сообщение другому thread-у, то тут надо огранизовывать взаимодействие между \verb"QApplication" на разных thread-ах.
+Благо Qt дает некую поддержку из коробки для этого.
+Но я не хочу это обсуждать.
+
+\paragraph{QPort}
+
+Обратите внимание, что сейчас обсуждается задача безопасной пересылки сообщения в экосистеме Qt.
+Этой проблемы может не быть в других экосистемах, но так и хорошо, я смогу продемонстрировать как подобные вещи решаются.
+Так как это задача более низкоуровневая, чем observer pattern, то здесь речь будет идти о более простом примитиве, который я хочу назвать \verb"QPort".
+Его задача будет состоять лишь в том, чтобы уметь передавать безопасно данные из от одного порта к другому не блокирующим образом.
+Ничего другого эти порты уметь не будут.
+И уже поверх этих портов мы построим observer pattern.
+Давайте схематично изобразим, что из себя представляет сообщение и как оно передается.
+\[
+\xymatrix@R=15pt{
+  {}&{}&{\verb"QApplication"}
+  \ar@{=>}@(r,u)[rdd]^{2}
+  &{}
+  \\
+  {}&{{\verb"Message"}}
+  \ar@{=>}@(u,l)[ur]^{1}
+  {\save
+  [].[ddd]*+[F-]\frm{}
+  \restore
+  }
+  &{}&{}\\
+  {{\verb"QPort"}}&
+  {{\verb"QPtr from"}}
+  \ar[l]
+  {\save
+  [].[dd]*[F-]\frm{}
+  \restore
+  }
+  &{}&{\verb"QPort"}\\
+  {}&{{\verb"QPtr to"}}
+  \ar[rru]
+  &{}&{}\\
+  {}&{{\verb"any data"}}&{}&{}\\
+}
+\]
+\begin{enumerate}
+\item Сообщение \verb"Message" содержит три поля
+\begin{enumerate}
+\item Адрес порта отправителя в виде \verb"QPointer".
+Адрес отправителя нам понадобится для двусторонней коммуникации в observer pattern.
+
+\item Адрес порта получателя в виде \verb"QPointer".
+
+\item И сами данные в виде стирающего типа \verb"std::any".
+Это означает, что пользователь портов должен знать, что он отправляет и написать весь функционал поддерживающий типизацию поверх этой системы.
+\end{enumerate}
+Тут надо сказать зачем данные отправляются в виде \verb"std::any".
+Почему мы не используем шаблонный порт \verb"QPort<T>", что гарантировало бы доставку сообщений определенного типа.
+Тут к сожалению выстреливает еще одна особенность именно экосистемы Qt.
+Дело в том, что для правильной работы Qt выполняет генерацию кода для каждого \verb"QObject".
+Для этого есть специальный метакомпилятор \verb"moc".
+И метакомпилятор всегда применяется к \verb"cpp" файлам и никогда не применяется к хедерам.
+Но шаблон нельзя разделить на хедер и сурс.
+Потому приходится обходиться без шаблонов с помощью стирающих типов.
+
+\item Порт отправитель не шлет сообщение напрямую порту получателю, вместо этого сообщение отправляется \verb"QApplication" по стрелке (1).
+Это действие всегда безопасно, потому что Qt экосистема гарантируется, что \verb"QApplication" будет жить, если жив на данном thread-е дольше всех остальных объектов.
+Он создается первым, и удаляется последним.
+Межthread-овая коммуникация требует некоторой отдельной работы.
+
+\item Теперь нам надо будет внести модификацию в поведение \verb"QApplication", чтобы он умел переотправлять наши сообщения порту получателю.
+Идея в том, что в начале \verb"QApplication" проверяет \verb"QPointer" получателя.
+Так как получатель живет на этом же thread-е, то у нас нет гонки между деструктором получателя и обработкой сообщения.
+Либо одно либо другое происходит раньше.
+Потому \verb"QApplication" может спокойно проверить \verb"QPointer" и если он не \verb"nullptr", то можно дернуть по его адресу метод \verb"event".
+\end{enumerate}
+
+\paragraph{Сообщения}
+% TO DO
+
+Все сообщения в Qt экосистеме должны быть унаследованы публично от \verb"QEvent".
+Как было изображено на диаграмме мы должны иметь
+\begin{cppcode}
+class Message : public QEvent {
+public:
+  using CPointer = QPointer<QEvent>;
+  ...
+private:
+  CPointer from_;
+  CPointer to_;
+  std::any data_;
+};
+\end{cppcode}
+Кроме того, у каждого сообщения есть идентификатор \verb"QEvent::Type", который представляет из себя целое число.
+Это просто тег, который говорит получателю, что это за сообщения, чтобы потом суметь вынуть данные.
+Экосистема Qt позволяет зарегистрировать автоматически первый свободный идентификатор.
+Для этого выделим статический метод, который зарегистрирует тип при первом вызове и будет возвращать его значение всюду далее.
+\begin{cppcode}
+class Message : public QEvent {
+public:
+  static QEvent::Type type() {
+    static int message_type = registerEventType();
+    return QEvent::Type{message_type};
+  }
+  ...
+private:
+  ...
+};
+\end{cppcode}
+Напишем полностью интерфейс класса
+\begin{cppcode}
+class Message : public QEvent {
+public:
+  using CPointer = QPointer<QObject>;
+  static QEvent::Type type();
+  
+  Message(CPointer from, CPointer to, const std::any& data);
+  Message(CPointer from, CPointer to, std::any&& data);
+  
+  std::any&& extract();
+  
+  bool isReceiverAlive() const;
+  
+  CPointer receiver() const;
+  CPointer to() const;
+  CPointer from() const;
+private:
+  CPointer from_;
+  CPointer to_;
+  std::any data_;
+};
+\end{cppcode}
+В начале покажем, как нужно написать конструкторы
+\begin{cppcode}
+Message(CPointer from, CPointer to, const std::any& data)
+  : QEvent(type()), from_(std::move(from)), to_(std::move(to)),
+    data_(data) {}
+Message(CPointer from, CPointer to, std::any&& data)
+  : QEvent(type()), from_(std::move(from)), to_(std::move(to)),
+    data_(std::move(data)) {}
+\end{cppcode}
+Тут все просто, мы вызываем базовый конструктор, в который передаем тип сообщения вызывая статическую функцию \verb"type".
+Нам нужны два конструктора, чтобы была возможность положить новые данные в сообщения или мувнуть туда уже существующие.
+Теперь имплементация оставшихся методов
+\begin{cppcode}
+class Message : public QEvent {
+public:
+  ...
+  std::any&& extract() {
+    return std::move(data_);
+  }
+  bool isReceiverAlive() const {
+    return to_;
+  }
+  CPointer receiver() const {
+    return to_;
+  }
+  CPointer to() const {
+    return to_;
+  }
+  CPointer from() const {
+    return from_;
+  }
+private:
+  ...
+};
+\end{cppcode}
+Тут все просто кроме быть может метода \verb"extract".
+Дело в том, что когда сообщение приходит в порт назначения, то оно больше использоваться не будет.
+А значит, нам надо вынуть данные из сообщения.
+Для этого нужно мувнуть данные наружу.
+Тут есть две опции:
+\begin{enumerate}
+\item Вернуть \verb"std::any&&".
+
+\item Вернуть \verb"std::any".
+\end{enumerate}
+Но в любом случае нужно будет вокруг \verb"data_" добавить \verb"std::move(data_)".
+Это чуть ли ни единственный пример, когда нужно писать \verb"std::move" в \verb"return".
+Без этого каста, будет сниматься копия с данных во второй имплементации.
+А первая имплементация выдаст ошибку компиляции.
+
+\paragraph{Имплементация QPort}
+
+Начнем с интерфейса
+\begin{cppcode}
+class QPort : public QObject {
+  Q_OBJECT
+public:
+  using Message = detail::Message;
+  using CPointer = Message::CPointer;
+
+  void send(CPointer from, CPointer to, std::any data) const;
+  bool event(QEvent* event) override;
+
+protected:
+  virtual void action(CPointer from, std::any&& data) = 0;
+
+private:
+  static constexpr bool k_is_processed = true;
+};
+\end{cppcode}
+Давайте прокомментируем, что тут происходит.
+Прежде всего, чтобы быть участником Qt экосистемы и уметь получать сообщения от системы нужно публично унаследоваться от \verb"QObject".
+Однако, этого мало.
+Из-за кодогенерации, нужно для каждого такого участника экосистемы сгенерировать некоторые служебные данные, без которых взаимодействие с системой не возможно.
+Для этого служит макрос \verb"Q_OBJECT", который добавляется сразу же в приватную часть класса.
+
+Обратите внимание, что я страшный сторонник type erasure и ненавистник наследования с виртуальными методами внезапно начинаю использовать виртуальные методы.
+Связано это с тем, что в основе дизайна Qt лежит возможность наследоваться от базового класса, модифицируя его поведение переопределением виртуальных методов.
+Если фреймворк использует такой подход, то использовать стирающие типы будет очень сложно, код будет менее читаемым и громоздским и скорее всего еще и будет менее эффективным.
+Потому раз этот фреймворк использует такой подход, то нужно придерживаться его при взаимодействии с этим фреймворком.
+Но вот снаружи я могу использовать любые парадигмы, которые захочу.
+
+Метода \verb"action" является чисто виртуальным.
+Это действие, которое будет выполняться при получении сообщения.
+Обратите внимание, что данные получаются по rvalue ссылке, что означает, что мы будем вынимать данные из сообщения и передавать в этот метод через мув.
+Этот метод должен быть перегружен у наследника, какими будут \verb"Observable" и \verb"Observer".
+
+Теперь как имплементируется метод отправки сообщения
+\begin{cppcode}
+void QPort::send(CPointer from, CPointer to, std::any data) const {
+  QCoreApplication::postEvent(
+      QCoreApplication::instance(), // to whom
+      new Message(std::move(from), std::move(to), std::move(data)));
+}
+\end{cppcode}
+Тут надо обратить внимание на то, что внутри вызывается всего лишь одна функция Qt экосистемы \verb"postEvent", которая просто помещает сообщение в почтовый ящик.
+Эта функция принимает два аргумента:
+\begin{enumerate}
+\item Адрес получателя, как адрес объекта.
+Здесь мы пишем адрес текущего \verb"QApplication".
+Этот объект обеспечивает существование и функционирование Qt экосистемы на данном thread-е и потому ему письмо всегда можно доставить безопасно.
+
+\item Сообщение передаваемый по указателю.
+Сообщение обязано быть унаследовано от \verb"QEvent".
+Пусть вас не смущает голое \verb"new" в коде.
+Данная функция захватывает владение сообщением и гарантирует его корректный менеджмент.
+При работе Qt всегда приходится думать кто кем владеет, чтобы случайно не было утечек данных.
+\end{enumerate}
+
+И в теперь надо обсудить обработку входящих сообщений портом в функции \verb"event":
+\begin{cppcode}
+static constexpr bool k_is_processed = true;
+
+bool QPort::event(QEvent* event) {
+  if (event->type() == Message::type()) {
+    Message* msg = static_cast<Message*>(event);
+    action(msg->from(), msg->extract());
+    return k_is_processed;
+  }
+  return QObject::event(event);
+}
+\end{cppcode}
+Все что тут происходит мы смотрим на получаемое сообщение и если оно нужного нам типа, то мы вынимаем из него данные и уже скармливаем эти данные функции \verb"action", которую мы обсудили выше.
+
+\paragraph{Поддержка сообщений со стороны Qt}
+
+На самом деле, чтобы эта схема работала нужно еще внести дополнительные изменения в \verb"QApplication", чтобы он знал, как реагировать на наши сообщения.
+Это тоже делается наследованием от \verb"QApplication".
+Все что мы сделаем -- добавим правило обработки сообщений в самое начало.
+Это делается с помощью функции \verb"eventFilter".
+В коде это выглядит так
+\begin{cppcode}
+class QRunTime : public QApplication {
+public:
+  QRunTime(int& argc, char** argv);
+private:
+  bool eventFilter(QObject* obj, QEvent* event) override;
+};
+\end{cppcode}
+Я специально меняю название на \verb"QRunTime", потому что по смыслу это именно run-time системы на данном thread-е, а не одно приложение.
+Конструктор должен установить на себя же фильтр, который представляет из себя действие, которое будет производиться над сообщением до всех остальных действий.
+\begin{cppcode}
+QRunTime(int& argc, char** argv) : QApplication(argc, argv) {
+  installEventFilter(this);
+}
+\end{cppcode}
+Функция \verb"installEventFilter" прикрепила к \verb"this" его же самого как фильтрующий объект.
+А метод, который будет вызываться для фильтрации надо имплементировать в \verb"eventFilter".
+\begin{cppcode}
+bool eventFilter(QObject* obj, QEvent* event) override {
+  using Message = QApp::Library::QPort::Message;
+  if (event->type() == Message::type()) {
+    Message* msg = static_cast<Message*>(event);
+    if (msg->isReceiverAlive())
+      msg->receiver()->event(event);
+    return true; // stop processing the event
+  }
+  return QApplication::eventFilter(obj, event);
+}
+\end{cppcode}
+Все что мы делаем -- проверяем тип сообщения.
+Если это наше особое сообщение для порта, то мы проверяем жив ли получатель, что делается через \verb"QPointer" внутри метода \verb"isReceiverAlive".
+После чего напрямую дергаем обработчик сообщения у получателя и говорим, что это сообщение больше обрабатывать не нужно.
+И в конце вызываем дефолтный \verb"eventFilter" для \verb"QApplication".
+
+\subsubsection{Observer и Observable поверх Qt}
+
+Прежде чем описывать имплементацию, давайте я напомню, что решение ниже пусть и не блокирующее, но не является много поточным.
+Я специально не рассматриваю сложности связанные с межпоточным взаимодействием.
+Более того, сами \verb"QPort"-ы в моей имплементации не способны корректно работать в многопоточке.
+
+
+\paragraph{Идея}
+
+Идейно Observer и Observable будут внутри себя содержать \verb"QPort"-ы, с помощью которых они будут пересылать данные друг другу.
+Снаружи коммуникация идет односторонняя, всегда Observable оповещает Observer.
+Однако, для реализации корректного одностороннего протокола, на нижнем уровне все равно требуется двусторонее общение.
+Оно в этом случае не является проблемой, потому что это общение происходит в рамках конкретного паттерна, где можно перебрать все случаи.
+\[
+\xymatrix@R=15pt{
+    {\verb"Observable"}\ar@{=>}[rrr]
+    {\save
+  [].[d]*+[F-]\frm{}
+  \restore
+  }
+    &{}&{}&{\verb"Observer"}
+    {\save
+  [].[d]*+[F-]\frm{}
+  \restore
+  }
+    \\
+    {\verb"QPort"}\ar@/^/[rrr]&{}&{}&{\verb"QPort"}\ar@/^/[lll]\\
+}
+\]
+Функционал данных классов можно описать так:
+\begin{center}
+\begin{tabular}{cc}
+{
+\begin{minipage}[\baselineskip]{5.5cm}
+\textbf{\verb"Observable"}
+\begin{itemize}
+\item Конструктор -- бинд данных
+\item \verb"subscribe"
+\item \verb"notify"
+\item \verb"unsubscribeAll"
+\end{itemize}
+\end{minipage}
+}
+&
+{
+\begin{minipage}[\baselineskip]{5.5cm}
+\textbf{\verb"Observer"}
+\begin{itemize}
+\item Конструктор -- бинд callback
+\item \verb"unsubscribe"
+\item \verb"subscribeTo"
+\item \verb"isSubscribed"
+\end{itemize}
+\end{minipage}
+}
+\end{tabular}
+\end{center}
+Важно подчеркнуть, что теперь обмен сообщениями не блокирующий.
+Потому у этих классов теперь нет общего инварианта.
+Мы должны про них думать так, как будто они общаются по сети друг с другом.
+
+\paragraph{Формат сообщения}
+
+Для обеспечения двустороннего общения нам понадобится три поля в сообщении
+\begin{enumerate}
+\item Адрес отправителя.
+
+\item Адрес получателя.
+
+\item Данные.
+\end{enumerate}
+Графически можно это изобразить так:
+\[
+\xymatrix@R=15pt{
+  {\verb"Observable"}&{\verb"Message"}
+    {\save
+  [].[ddd]*+[F-]\frm{}
+  \restore
+  }
+  &{\verb"Observer"}&{}\\
+  {}&{\verb"QPtr from"}
+  \ar[lu]
+    {\save
+  [].[dd]*[F-]\frm{}
+  \restore
+  }
+  &{}&{}\\
+  {\verb"ServiceMsg"}
+  \ar[rd]
+  {\save
+  [].[]*[F-]\frm{}
+  \restore
+  }
+  &{\verb"QPtr to"}\ar[ruu]&{\verb"ServiceMsg"}
+      {\save
+  [].[]*[F-]\frm{}
+  \restore
+  }
+  \ar[ld]&{}\\
+  {\verb"DataMsg"}\ar[r]
+  {\save
+  [].[]*[F-]\frm{}
+  \restore
+  }
+  &{\verb"any data"}&{}&{}\\
+}
+\]
+Данные при общении между Observable и Observer бывают двух видов:
+\begin{enumerate}
+\item Сервисные сообщения для установки и обрыва связи друг с другом.
+Эти данные могут посылаться в обе стороны.
+
+\item Данные, которые Observable передает Observer при оповещении.
+Эти данные всегда идут от Observable к Observer.
+\end{enumerate}
+В простейшей экосистеме Qt, где гарантируется доставка сообщений и их порядок нам не нужно большого количества сервисных сообщений.
+Достаточно использовать
+\begin{enumerate}
+\item \verb"Subscribe"
+\item \verb"Unsubscribe"
+\end{enumerate}
+Однако, чтобы имплементировать надежное соединение, которое бы давало корректное соединение между портами по хорошему нужно использовать State Machine внутри Observable и Observer.
+Но эта тема совсем далека от цели данного текста и потому мы просто напишем очень простую логику.
+
+\paragraph{Observable}
+
+Вот как будет выглядеть класс \verb"Observable"
+\begin{cppcode}
+template<class T>
+class Observable : protected QPort {
+  using GetAction = std::function<const T&()>;
+public:
+  using ServiceData = ServiceData;
+  using CPointer = QPort::CPointer;
+private:
+  using CListeners = std::list<CPointer>
+  using Data = std::variant<T, ServiceData>;
+public:
+  template<class TF>
+  Observable(TF&& data);
+  
+  Observable(const Observable&) = delete;
+  Observable(Observable&&) noexcept = delete;
+  Observable& operator=(const Observable&) = delete;
+  Observable& operator=(Observable&&) noexcept = delete;
+  ~Observable();
+  
+  void notify();
+  void subscribe(CPointer obs);
+  void unsubscribeAll();
+private:
+  // QPort virtual method
+  void action(CPointer from, std::any&& data) override;
+  GetAction data_;
+  CListeners listeners_;
+};
+\end{cppcode}
+Давайте прокомментируем, что тут происходит.
+Сам класс унаследован от \verb"QPort", потому что этого требует парадигма использоваться порта и в строке~25 мы как раз будем имплементировать функцию \verb"action", которая отвечает за обработку полученного сообщения.
+Так как общение \verb"QPort" идет по адресу, мы удаляем возможность перемещать и копировать данный объект.
+Это ломает value semantics.
+Если мы хотим сохранить value semantics, то нам придется использовать следящие указатели, а не просто \verb"QPointer".
+
+Внутри класса мы храним два поля:
+\begin{enumerate}
+\item
+Список тех, кого он в данный момент считает на себя подписанным.
+Это просто список \verb"QPointer"-ов.
+Не обращайте внимание, что это \verb"std::list".
+
+\item Метод получения данных, который хранится в \verb"data_".
+Этот метод будет возвращать новую копию данных, которые надо переслать \verb"Observer"-у.
+Вызов этого метода будет единственным местом, где происходит копирование данных.
+Без этого копирования обойтись не возможно.
+Но его можно сделать дешевым, если данные могут быть только константными (см. раздел~\ref{section::SharedPtr}).
+\end{enumerate}
+Данные передаваемые по порту у нас -- это либо сервисное сообщение \verb"ServiceData", либо шаблонный тип \verb"T".
+Раз \verb"QPort"-ы не различают типов данных, то мы просто будет передавать \verb"std::variant" и проверять тип сообщения перед распаковкой.
+
+Теперь пройдемся по методам.
+В начале конструктор.
+Его задача очень простая -- забиндиться на данные, то есть запомнить метод получения данных в переменной \verb"data_".
+\begin{cppcode}
+template<class TF>
+Observable(TF&& data) : data_(std::forward<TF>(data)) {}
+
+\end{cppcode}
+А в деструкторе надо отписать от себя всех перед смертью, чтобы от нас не ждали сообщения и не думали, что на нас все еще подписаны.
+\begin{cppcode}
+~Observable() {
+  unsubscribeAll();
+}
+\end{cppcode}
+Оповещение тоже вполне себе предсказуемо:
+\begin{cppcode}
+void notify() {
+  for (CPointer obs : listeners_)
+    sendData(obs);
+}
+\end{cppcode}
+Здесь мы будем использовать два приватных метода, которые посылают либо сервисные сообщения, либо сообщения с данными.
+Метод \verb"sendData" посылает данные адресату, его имплементация будет ниже.
+Метод отписывающий всех observer-ов на самом деле оповещает всех, кто подписан о том, что надо от нас отписаться.
+\begin{cppcode}
+void unsubscribeAll() {
+  while (!Listeners_.empty()) {
+    sendServiceMessage(Listeners_.front(), {Unsubscribe});
+    Listeners_.pop_front();
+  }
+}
+\end{cppcode}
+Обратите внимание, что метод отправляет служебное сообщение \verb"Observer" порту, что надо отписаться.
+И потом исключает порт из своего списка подписчиков.
+В этот момент \verb"Observer" порт все еще думает, что он подписан (если с ним никто не взаимодействовал и не поменял его статус).
+Но нам это не важно.
+Служебные сообщения посылаются с помощью функции \verb"sendServiceMessage", которая будет описана ниже.
+
+Метод \verb"subscribe" теперь надо понимать так: пригласи такого-то \verb"Observer" порта подписаться на наш \verb"Observable" порт.
+\begin{cppcode}
+void subscribe(CPointer obs) {
+  if (obs == nullptr)
+    return;
+  if (!contains(obs)) {
+    Listeners_.push_back(obs);
+    sendServiceMessage(obs, {Subscribe});
+  }
+  sendData(obs);
+}
+\end{cppcode}
+Обратите внимание, что в строке~6 мы посылаем сервисное сообщение, приглашающее порт \verb"obs" начать нас прослушивать.
+И потом в строке~8 сразу посылаем данные не дожидаясь никакого ответа.
+Так можно делать, потому что Qt экосистема гарантирует доставку сообщений и гарантирует их в правильном порядке.
+По-хорошему, нужно в начале установить на обоих портах соединение и уже после его установки пересылать данные.
+Я не хочу тут вдаваться в эти детали.
+
+Теперь сервисные функции для посылки сообщений.
+\begin{cppcode}
+using Data = std::variant<T, ServiceMessage>;
+
+void sendData(CPointer to) {
+  QPort::send(this, to, Data(data_()));
+}
+void sendServiceMessage(CPointer to, ServiceData data)  {
+  QPort::send(this, to, Data(std::move(data)));
+}
+\end{cppcode}
+Тут мы просто зовем методы \verb"QPort"-ов.
+Обратите внимание, что по умолчанию третий аргумент принимается как \verb"std::any", а потому вначале надо данные кастануть к общему \verb"std::variant".
+В строчке~4 вызов \verb"data_()" возвращает rvalue копию данных.
+А потому она мувается внутрь \verb"std::variant".
+Который уже мувается внутрь \verb"std::any".
+В случае сервисного сообщения мы принимаем данные по значению и муваем их внутрь руками.
+
+Теперь, как выглядит обработчик приходящих сообщений.
+Так как мы принимаем \verb"std::variant", то у нас есть известная стратегия обработки данных с помощью visitor.
+\begin{cppcode}
+struct MsgVisitor {
+  void operator()(T&&) const;
+  void operator()(ServiceData data) const;
+};
+
+void action(CPointer from, std::any&& data) override {
+  Data msg = std::any_cast<Data>(std::move(data));
+  std::visit(MsgVisitor(this, from), std::move(msg));
+}
+\end{cppcode}
+То есть мы принимаем данные и вынимаем данные из \verb"data", которая есть \verb"std::any", с помощью \verb"any_cast" и складываем в \verb"msg".
+А далее отправляем это сообщение в визитера \verb"MsgVisitor".
+Визитер должен знать \verb"Observable", поэтому он передается в качестве первого аргумента в конструктор, и порт от кого пришло сообщение, для корректной реакции на сообщение.
+Имплементация визитера следующая.
+\begin{cppcode}
+class MsgVisitor {
+public:
+  MsgVisitor(Observable* host, CPointer from) : host_(host), from_(from) {
+  }
+  void operator()(T&&) const {
+  }
+  void operator()(ServiceData data) const {
+    host_->handleServiceData(data, from_);
+  }
+private:
+  Observable* host_;
+  CPointer from_;
+};
+\end{cppcode}
+Данные нам прийти не могут, но мы просто делаем заглушку в виде пустого метода.
+А на сервисное сообщение визитер дергает у текущего \verb"Observable" нужный приватный метод.
+\begin{cppcode}
+void handleServiceData(ServiceData data, CPointer from) {
+  switch (data.cmd) {
+  case Subscribe:
+    subscribe(from);
+    break;
+  case Unsubscribe:
+    unsubscribe(from);
+    break;
+  default:
+    break;
+  }
+}
+\end{cppcode}
+А в нем идет просто перебор по возможным служебным сообщениям.
+
+\paragraph{Observer}
+
+Теперь посмотрим на \verb"Observer" в коде.
+\begin{cppcode}
+template<class T>
+class Observer : protected QPort {
+  using Action = std::function<void(T&&)>;
+public:
+  using ServiceData = ServiceData;
+  using CPointer = QPort::CPointer;
+private:
+  using Data = std::variant<T, ServiceData>;
+
+public:
+  template<class TF>
+  Observer(TF&& onNotify);
+  
+  Observer(const Observer&) = delete;
+  Observer(Observer&&) noexcept = delete;
+  Observer& operator=(const Observer&) = delete;
+  Observer& operator=(Observer&&) noexcept = delete;
+  ~Observer();
+  
+  void unsubscribe();
+  void subscribe(CPointer obs);
+  bool isSubscribed() const;
+private:
+  // QPort virtual method
+  void action(CPointer from, std::any&& data) override;
+  Action onNotify_;
+  CPointer observable_ = nullptr;
+};
+\end{cppcode}
+Как и в случае \verb"Observable" мы удаляем все операции мува и копирования ибо порты общаются с помощью адресов и их менять нельзя.
+
+Внутри класса мы храним два поля:
+\begin{enumerate}
+\item Действие, которое должно выполняться при прилете новых данных.
+
+\item Адрес \verb"Observable", на который мы подписаны в данный момент.
+Этот адрес хранится в виде \verb"QPointer", чтобы уметь проверять жив ли объект перед посылкой данных.
+\end{enumerate}
+
+Теперь пройдемся по методам.
+Начнем с конструктора и деструктора.
+\begin{cppcode}
+template<class TF>
+Observer(TF&& onNotify) : onNotify_(std::forward<TF>(onNotify)) {}
+\end{cppcode}
+Тут все прямолинейно, мы просто сохраняем метод внутри \verb"OnNotify_".
+В деструкторе же мы просто отписываемся перед смертью.
+Точнее, мы посылаем сообщение, что хотим отписаться прежде чем умереть.
+\begin{cppcode}
+~Observer() {
+  unsubscribe();
+}
+\end{cppcode}
+Метод проверки подписаны мы или нет имплементируется тривиальной проверкой.
+\begin{cppcode}
+bool isSubscribed() const {
+  return observable_ != nullptr;
+}
+\end{cppcode}
+Теперь методы подписки и отписки.
+\begin{cppcode}
+void unsubscribe() {
+  if (!isSubscribed())
+    return;
+  sendServiceMessage(Observable_, {Unsubscribe});
+  Observable_ = nullptr;
+}
+
+void subscribe(CPointer obs) {
+  if (obs == nullptr)
+    return;
+  if (isSubscribed())
+    unsubscribe();
+  Observable_ = obs;
+  sendServiceMessage(Observer_, {Subscribe});
+}
+\end{cppcode}
+Тут важно обратить внимание, что метод отправки сервисных сообщений не блокирующий.
+А потому в строке~4 отправляется оповещение, что мы отписались.
+А в строке~14 отправляется приглашение на то, чтобы нас подписали.
+Сервисный методы отправки сообщений устроены так
+\begin{cppcode}
+using Data = std::variant<T, ServiceMessage>;
+
+void sendServiceMessage(CPointer to, ServiceData data) {
+  QPort::send(this, to, Data(std::move(data)));
+}
+\end{cppcode}
+Логика абсолютно такая же как и в случае \verb"Observable".
+Тут важно не забыть обернуть данные в \verb"std::variant".
+При получении сообщений, мы реагируем в виртуальной функции \verb"action".
+\begin{cppcode}
+void action(CPointer from, std::any&& data) override {
+  Data msg = std::any_cast<Data>(std::move(data));
+  std::visit(MsgVisitor(this, from), std::move(msg));
+}
+\end{cppcode}
+Так как сообщения бывают двух типов: сервисные и с данными, то нам надо правильно распаковать \verb"std::variant", что мы делаем с помощью визитера.
+Имплементация визитера выглядит так:
+\begin{cppcode}
+class MsgVisitor {
+public:
+  MsgVisitor(CObserver* host, CPointer from) : host_(host), from_(from) {
+  }
+  void operator()(T&& data) const {
+    host_->handleData(std::move(data), from_);
+  }
+  void operator()(ServiceData data) const {
+    host_->handleServiceData(data, from_);
+  }
+private:
+  Observer* host_;
+  CPointer from_;
+};
+\end{cppcode}
+И как и в случае \verb"Observable" визитер лишь перенаправляет запрос нужной функции из \verb"Observer".
+Обработка сервисных сообщений устроена так.
+\begin{cppcode}
+void handleServiceData(ServiceData data, CPointer from) {
+  switch (data.cmd) {
+  case Subscribe:
+    if (isSubscribed() && Observable_ != from)
+      sendServiceMessage(Observable_, {Unsubscribe});
+    Observable_ = from;
+    break;
+  case Unsubscribe:
+    if (Observable_ == from)
+      Observable_ = nullptr;
+    break;
+  default:
+    break;
+  }
+}
+\end{cppcode}
+Здесь имплементировано немного нетривиальное поведение.
+А именно, если мы нас приглашают подписаться и мы уже подписаны на другой порт, то мы отписываемся от другого порта.
+И после этого встаем на прослушку.
+При отписывании, мы проверяем, нам предложил отписаться тот самый порт, который мы слушаем или нет.
+И отписываемся, только если это тот порт, который мы слушали.
+Обратите внимание, что поведение на сервисное сообщение содержащее \verb"Subscribe" запрос отличается от поведения при вызове метода \verb"subscribe".
+Это может быть баг, это может быть намеренно разное поведение.
+Если вы хотите одинаковое поведение, то внутри метода \verb"subscribe" нужно вызвать \verb"handleServiceData".
+Главное понимать, что вы хотите, и что код делает, что нужно.
+
+Обработчик данных выглядит так.
+\begin{cppcode}
+void handleData(T&& data, CPointer from) const {
+  if (!isSubscribed())
+    return;
+  if (Observable_ == from)
+    onNotify_(std::move(data));
+}
+\end{cppcode}
+Здесь мы в начале проверяем, а слушаем ли мы сейчас кого-то или нет.
+Просто так могло получиться, что мы уже решили отписаться от порта, а он нам в это время успел отправить данные, и это прилетели запоздавшие данные, которые мы уже слушать не хотим.
+Потому если мы не подписаны, мы никого не слушаем и игнорируем данные.
+Если мы подписаны, мы проверяем от нужного \verb"Observable" или нет пришли данные.
+И только если данные пришли от нужного порта, мы их передаем в метод \verb"onNotify_".
+Передаем все данные через мув.

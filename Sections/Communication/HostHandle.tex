@@ -1,0 +1,1607 @@
+\ProvidesFile{HostHandle.tex}[Host Handle]
+
+
+\subsection{Host/Handle}
+\label{section::TrackingPtr}
+
+В этом разделе я хочу обсудить по-настоящему умные указатели.
+А именно, это такие указатели, которые отслеживают адрес объекта при его перемещении в памяти, знают жив ли все еще объект или нет.
+Как и выше тут приводится однопоточный код.
+Не надо думать, что в многопоточном случае надо делать то же самое но сложнее.
+Можно попробовать, а можно просто поставить правильные границы взаимодействия между потоками.
+
+\subsubsection{Что хотим}
+% TO DO
+
+Если мы хотим в одном объекте пользоваться другим сторонним объектом, то самое простое -- это хранить на него указатель.
+
+\[
+\xymatrix@R=15pt@C=15pt{
+  {\text{host}}
+  	{
+	\save
+   [].[]*+[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{}&{\text{ptr}}\ar[ll]
+    	{
+	\save
+   [].[]*[F-]\frm{}
+   \restore
+	}
+    	{
+	\save
+   [].[]*+[F-:<3pt>]\frm{}
+   \restore
+	}
+  \\ 
+}
+\]
+Однако при таком наивном подходе есть несколько проблем.
+\begin{center}
+\textbf{Проблемы:}
+
+\vspace{0.5cm}
+
+\begin{tabular}{cc}
+{
+\begin{minipage}[\baselineskip]{5.5cm}
+\centering{Перемещение}
+\[
+\xymatrix@R=15pt@C=15pt{
+  {\phantom{host}}\ar@{==>}@/_30pt/[d]<-5pt>
+  	{
+	\save
+   [].[]*+[F--:<3pt>]\frm{}
+   \restore
+	}
+  &{}&{\text{ptr}}\ar[ll]
+    	{
+	\save
+   [].[]*[F-]\frm{}
+   \restore
+	}
+    	{
+	\save
+   [].[]*+[F-:<3pt>]\frm{}
+   \restore
+	}
+  \\ 
+  {\text{host}}
+    	{
+	\save
+   [].[]*+[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{}&{}\\
+}
+\]
+\end{minipage}
+}&{
+\begin{minipage}[\baselineskip]{5.5cm}
+\centering{Уничтожение}
+\[
+\xymatrix@R=15pt@C=15pt{
+  {\phantom{host}}
+  	{
+	\save
+   [].[]*+[F--:<3pt>]\frm{}
+   \restore
+	}
+  &{}&{\text{ptr}}\ar[ll]
+    	{
+	\save
+   [].[]*[F-]\frm{}
+   \restore
+	}
+    	{
+	\save
+   [].[]*+[F-:<3pt>]\frm{}
+   \restore
+	}
+  \\ 
+  {\phantom{host}}
+  &{}&{}\\
+}
+\]
+\end{minipage}
+}\\
+\end{tabular}
+\end{center}
+Вот список этих проблем:
+\begin{enumerate}
+\item Объект мог переехать по другому адресу.
+
+\item Объект мог умереть.
+
+\item Самое интересное: а какое поведение мы хотим при копировании объекта, на который мы ссылаемся?
+\end{enumerate}
+Оказывается, что первые две проблемы -- технические и решаемые.
+Как раз решению этих проблем и будет посвящен весь этот раздел.
+А вот третья проблема требует отдельного рассмотрения, потому что она раскрывает важные проблемы при отсутствии value semantics.
+
+\paragraph{Что плохого в копировании}
+
+Давайте использовать следующие имена
+\begin{enumerate}
+\item host -- объект, на который мы ссылаемся.
+
+\item handle -- умный указатель, который ссылается на host.
+\end{enumerate}
+И предположим, мы смогли имплементировать умный указатель handle, который может отслеживать своего host.
+И пусть теперь у нас есть два таких объекта в связанном состоянии.
+\[
+\xymatrix@R=15pt@C=15pt{
+  {\text{host}}
+      	{
+	\save
+   [].[]*+[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{}&{\text{handle}}\ar[ll]
+    	{
+	\save
+   [].[]*+[F-:<3pt>]\frm{}
+   \restore
+	}
+  \\ 
+}
+\]
+Теперь предположим, что мы хотим эту пару скопировать.
+Логически это означает, что мы бы хотели, чтобы новая пара была тоже связана стрелкой между собой.
+Однако, мы хотим так же поддерживать копирование только host или только handle.
+Давайте разберем следующие случаи:
+\begin{enumerate}
+\item Копирование handle.
+Есть по сути два варианта поступить:
+\begin{center}
+\begin{tabular}{cc}
+{
+\begin{minipage}[\baselineskip]{5.5cm}
+\[
+\xymatrix@R=15pt@C=15pt{
+  {\text{host}}
+      	{
+	\save
+   [].[]*+[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{}&{\text{handle1}}\ar[ll]\ar@{==>}@/^30pt/[d]<5pt>
+    	{
+	\save
+   [].[]*+[F-:<3pt>]\frm{}
+   \restore
+	}
+  \\
+  {}
+  &{}&{\text{handle2}}\ar[llu]
+    	{
+	\save
+   [].[]*+[F-:<3pt>]\frm{}
+   \restore
+	}
+  \\ 
+}
+\]
+\end{minipage}
+}&{
+\begin{minipage}[\baselineskip]{5.5cm}
+\[
+\xymatrix@R=15pt@C=15pt{
+  {\text{host}}
+      	{
+	\save
+   [].[]*+[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{}&{\text{handle1}}\ar[ll]\ar@{==>}@/^30pt/[d]<5pt>
+    	{
+	\save
+   [].[]*+[F-:<3pt>]\frm{}
+   \restore
+	}
+  \\ 
+  {}
+  &{}&{\text{handle2}}
+    	{
+	\save
+   [].[]*+[F-:<3pt>]\frm{}
+   \restore
+	}
+  \\ 
+}
+\]
+\end{minipage}
+}\\
+\end{tabular}
+\end{center}
+Мы делаем копию и сохраняем стрелку на хоста или просто делаем абсолютно новую копию, которая ни с кем не соединяется.
+Если вы когда-нибудь имплементировали скажем бинарное дерево на указателях, то когда вы создаете новый узел, то обычно все указатели в нем устанавливаются в \verb"nullptr" и это соответствуют второй картинке.
+В случае handle оба поведения выглядят разумными не ломают ничего.
+Это в частности связано с тем, что мы допускаем, что на одного host может ссылаться несколько handle.
+И если думать про handle, как про аналог умного указателя, то первое поведение будет более ожидаемым.
+
+\item Копирование host.
+Вот тут начинаются интересные вещи, потому что мы handle может ссылаться только на одного host.
+Что мы могли бы сделать:
+\begin{center}
+\begin{tabular}{cc}
+{
+\begin{minipage}[\baselineskip]{5.5cm}
+\[
+\xymatrix@R=15pt@C=15pt{
+  {\text{host1}}\ar@{==>}@/_30pt/[d]<-5pt>
+      	{
+	\save
+   [].[]*+[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{}&{\text{handle1}}\ar[lld]
+    	{
+	\save
+   [].[]*+[F-:<3pt>]\frm{}
+   \restore
+	}
+  \\
+  {\text{host2}}
+        	{
+	\save
+   [].[]*+[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{}&{\text{handle2}}\ar[ll]
+    	{
+	\save
+   [].[]*+[F-:<3pt>]\frm{}
+   \restore
+	}
+  \\ 
+}
+\]
+\end{minipage}
+}&{
+\begin{minipage}[\baselineskip]{5.5cm}
+\[
+\xymatrix@R=15pt@C=15pt{
+  {\text{host1}}\ar@{==>}@/_30pt/[d]<-5pt>
+      	{
+	\save
+   [].[]*+[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{}&{\text{handle1}}\ar[ll]
+    	{
+	\save
+   [].[]*+[F-:<3pt>]\frm{}
+   \restore
+	}
+  \\ 
+  {\text{host2}}
+        	{
+	\save
+   [].[]*+[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{}&{\text{handle2}}\ar[llu]
+    	{
+	\save
+   [].[]*+[F-:<3pt>]\frm{}
+   \restore
+	}
+  \\ 
+}
+\]
+\end{minipage}
+}\\
+\end{tabular}
+\end{center}
+В первом случае стрелки переезжают за хостом, а во втором мы просто создаем новую копию не соединенную ни с кем.
+И вот тут первое поведение не допустимо.
+Потому что оно ломает уже существующее соединение.
+А потому хоста мы можем лишь копировать без каких-либо соединений.
+
+\item Копирование соединенной пары host$\leftarrow$handle.
+Теперь когда мы знаем, какое поведение у копирующих операций для отдельно host и handle у нас допустимо, давайте посмотрим, что будет при копировании пары.
+\begin{center}
+\begin{tabular}{cc}
+{
+\begin{minipage}[\baselineskip]{5.5cm}
+\[
+\xymatrix@R=15pt@C=15pt{
+  {\text{host1}}\ar@{==>}@/_30pt/[d]<-5pt>
+      	{
+	\save
+   [].[]*+[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{}&{\text{handle1}}\ar[ll]\ar@{==>}@/^30pt/[d]<5pt>
+    	{
+	\save
+   [].[]*+[F-:<3pt>]\frm{}
+   \restore
+	}
+  \\
+  {\text{host2}}
+        	{
+	\save
+   [].[]*+[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{}&{\text{handle2}}\ar[llu]
+    	{
+	\save
+   [].[]*+[F-:<3pt>]\frm{}
+   \restore
+	}
+  \\ 
+}
+\]
+\end{minipage}
+}&{
+\begin{minipage}[\baselineskip]{5.5cm}
+\[
+\xymatrix@R=15pt@C=15pt{
+  {\text{host1}}\ar@{==>}@/_30pt/[d]<-5pt>
+      	{
+	\save
+   [].[]*+[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{}&{\text{handle1}}\ar[ll]\ar@{==>}@/^30pt/[d]<5pt>
+    	{
+	\save
+   [].[]*+[F-:<3pt>]\frm{}
+   \restore
+	}
+  \\ 
+  {\text{host2}}
+        	{
+	\save
+   [].[]*+[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{}&{\text{handle2}}
+    	{
+	\save
+   [].[]*+[F-:<3pt>]\frm{}
+   \restore
+	}
+  \\ 
+}
+\]
+\end{minipage}
+}\\
+\end{tabular}
+\end{center}
+Как мы видим ни в одном из этих случаев не возможно только копирующими операциями каждого из узлов восстановить нужное состояние для копии пары.
+Наличие соединения между host и handle означает наличие у них общего инварианта.
+А это означает, что структурой данных является не отдельно host или отдельно handle, а вся связанная пара host$\leftarrow$handle.
+Что в свою очередь значит, что любой scope, где эта пара находится, должен поддерживать связь при копировании.
+\end{enumerate}
+Примеры выше объясняют, что невозможно добиться правильного копирования соединенных объектов без внешнего вмешательства.
+Однако, есть еще очень важный пример, который показывает, что копирование может случайно разрушить существующие пары.
+
+\paragraph{Опасность копирования}
+
+Предположим, что мы умеем хранить host-ов и handle-ов в одном векторе.
+Это допустимая операция, так как handle-ы умеют следить за перемещением своего host.
+\[
+\xymatrix{
+  {}&{\text{host1}}
+  {
+	\save
+   [].[rrrr]*+[F--]\frm{}
+   \restore
+	}
+  {
+	\save
+   [].[]*[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{\text{handle1}}\ar@(dl,dr)[l]
+  {\save
+   [].[]*[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{\text{handle2}}\ar@(dr,dl)[r]
+  {\save
+   [].[]*[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{\text{host2}}
+  	{\save
+   [].[]*[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{\text{handle3}}\ar@(dl,dr)[l]
+  {\save
+   [].[]*[F-:<3pt>]\frm{}
+   \restore
+	}
+  \\
+}
+\]
+Давайте посмотрим, что будет при реаллокации вектора.
+Если move операция noexcept, то после реаллокации получится следующая картина:
+\[
+\xymatrix{
+     {}\ar@{=>}[d]^{\text{move}}&{\phantom{\text{host1}}}
+  {
+	\save
+   [].[rrrr]*+[F--]\frm{}
+   \restore
+	}
+  {
+	\save
+   [].[]*\frm{}
+   \restore
+	}
+  &{\phantom{\text{handle1}}}
+  {\save
+   [].[]*\frm{}
+   \restore
+	}
+  &{\phantom{\text{handle2}}}
+  {\save
+   [].[]*\frm{}
+   \restore
+	}
+  &{\phantom{\text{host2}}}
+  	{\save
+   [].[]*\frm{}
+   \restore
+	}
+  &{\phantom{\text{handle3}}}
+  {\save
+   [].[]*\frm{}
+   \restore
+	}\\
+  {}&{\text{host1}}
+  {
+	\save
+   [].[rrrr]*+[F--]\frm{}
+   \restore
+	}
+  {
+	\save
+   [].[]*[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{\text{handle1}}\ar@(dl,dr)[l]
+  {\save
+   [].[]*[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{\text{handle2}}\ar@(dr,dl)[r]
+  {\save
+   [].[]*[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{\text{host2}}
+  	{\save
+   [].[]*[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{\text{handle3}}\ar@(dl,dr)[l]
+  {\save
+   [].[]*[F-:<3pt>]\frm{}
+   \restore
+	}
+  \\
+}
+\]
+Объекты и связи переместятся как ни в чем не бывало.
+Однако, что если внезапно host или handle не nothrow movable.
+В этом случае вектор не имеет права использовать move операции и будет использовать копирование.
+А это означает, что после реаллокации у вас сломаются связи при любой имплементации копирования обсуждаемой выше.
+\[
+\xymatrix{
+  {}&{\phantom{\text{host1}}}
+  {
+	\save
+   [].[rrrr]*+[F--]\frm{}
+   \restore
+	}
+  {
+	\save
+   [].[]*\frm{}
+   \restore
+	}
+  &{\phantom{\text{handle1}}}
+  {\save
+   [].[]*\frm{}
+   \restore
+	}
+  &{\phantom{\text{handle2}}}
+  {\save
+   [].[]*\frm{}
+   \restore
+	}
+  &{\phantom{\text{host2}}}
+  	{\save
+   [].[]*\frm{}
+   \restore
+	}
+  &{\phantom{\text{handle3}}}
+  {\save
+   [].[]*\frm{}
+   \restore
+	}
+  \\
+   {}&{\text{host1}}
+  {
+	\save
+   [].[rrrr]*+[F--]\frm{}
+   \restore
+	}
+  {
+	\save
+   [].[]*[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{\text{handle1}}
+  {\save
+   [].[]*[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{\text{handle2}}
+  {\save
+   [].[]*[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{\text{host2}}
+  	{\save
+   [].[]*[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{\text{handle3}}
+  {\save
+   [].[]*[F-:<3pt>]\frm{}
+   \restore
+	}
+}
+\]
+Если бы копирующие операции были удалены, то при необходимости реаллоцировать вектор компилятор бы ругнулся, что он не может использовать такой объект в векторе.
+А так вы можете просто сломать связи между объектами и даже не заметить этого.
+
+\paragraph{Финальные мысли про копирование}
+
+Давайте резюмируем кратко, что мы осознали из проделанного:
+\begin{itemize}
+\item Копирование -- опасная процедура.
+Она разрушает связи между объектами.
+
+\item Разрушение связей не фиксится локально.
+То есть невозможно имплементировать копирующие операции host и handle так, чтобы при копировании правильно копировалась связь между ними.
+Для проведения такого копирования нужен внешний арбитр, который доложен следить за состоянием таких связей.
+Это плата за отсутствие value semantics.
+
+\item Из выше сказанного следует, что если мы хотим уметь ссылаться на другие объекты, то нас есть два пути:
+\begin{enumerate}
+\item Мы убираем возможность копировать объекты неявно.
+Это решение не требует глобальной информации и все делается локально.
+
+\item Мы оставляем возможность неявного копирования, но тогда должен быть внешний объект, который все время проверяет корректность ссылок между объектами.
+Это приблизительно как при имплементации структуры данных основанной на узлах и указателях на эти узлы.
+Только проблема в таком решении в том, что вам теперь в любом месте использования ваших указателей придется руками делать кучу лишней работы.
+Это решение не локальное и годится только внутри какой-нибудь структуры данных, но никак не подходит для проекта целиком.
+\end{enumerate}
+
+\item Логически и технически с операцией move проблем нет.
+Такую операцию можно легко поддержать на стороне host и handle.
+
+\item Обратите внимание, что даже если мы сделаем host не копируемым, то это еще не означает, что у него обязательно будет постоянный адрес.
+Он вполне может перемещаться в памяти и за его адресом нужно следить.
+
+\item Если вы хотите получить вместе постоянный адрес и value semantics, то это делается с помощью \verb"std::unique_ptr".
+\end{itemize}
+
+\subsubsection{Что хотим в коде}
+
+Прежде чем имплементировать что-то очень полезно понимать, а какой код вы хотите писать, чтобы он работал.
+Давайте начнем со следующего примера.
+Мы хотим к любому классу \verb"A" подключить возможность его отслеживать.
+Выглядеть это должно как-то так
+\begin{cppcode}
+class A : public Host<A> {
+public:
+  void f() const;
+  void g();
+};
+\end{cppcode}
+Заметьте, чтобы отслеживать объект, мы должны вмешаться в операции перемещения и разрушения, чтобы изменять информацию об адресе.
+Для этого мы можем добавить следящий класс в качестве базового.
+Публичное наследование нужно только для того, чтобы были доступны методы \verb"Host" снаружи из \verb"A".
+Но это не обязательно, можно просто пробросить эти методы наружу.
+Теперь ожидается следующее использование.
+\begin{cppcode}
+A a;
+Handle<A> h = a.handle();
+ConstHandle<a> ch = a.chandle();
+if (h) // true
+  h->g();
+A b = std::move(a);
+if (ch) // true
+  ch->f(); // OK
+\end{cppcode}
+В строках~2 и~3 создаются handle и константный handle на объект \verb"a", соответственно.
+В строке~4 проверяем жив ли объект, на который мы ссылаемся и вызываем метод \verb"g".
+В строке~6 перемещаем \verb"a" по новому адресу в объект \verb"b".
+После чего в строке~7 handle ссылается уже на новый объект в переменной \verb"b".
+Еще один пример, если handle живет дольше, чем host.
+\begin{cppcode}
+Handle<A> h;
+{
+  A a;
+  h = a.handle();
+}
+if (h) // false
+  h->f();  // f is not called
+\end{cppcode}
+В этом случае при выходе из внутреннего scope в строчке~5 объект \verb"a" умирает и \verb"h" теперь не ссылается на живой объект.
+И как раз проверка в строчке~6 будет ложна и метод \verb"f" не будет вызван на несуществующем объекте.
+Так же мы ожидаем защиту const correctness.
+Например если мы создали константный handle, то нельзя вызвать неконстантный метод.
+\begin{cppcode}
+A a;
+auto ch = a.chandle();
+ch->g(); // compilation error
+\end{cppcode}
+Или присваивание одного handle к другому должна тоже уважать const correctness.
+\begin{cppcode}
+const A a;
+Handle<A> h = b.handle(); // compilation error
+\end{cppcode}
+Нельзя внезапно преобразовать константный handle к неконстантному.
+
+\subsubsection{Идея имплементации}
+
+Идея на самом деле жутко простая и это один из хороших примеров использовать \verb"shared_ptr" и \verb"weak_ptr"
+Давайте будем хранить указатель на host в \verb"shared_ptr" следующим образом
+\[
+\xymatrix@R=15pt@C=15pt{
+  {\text{host}}
+  	{
+	\save
+   [].[d]*[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{}&{\phantom{handle1}}
+  &{}
+  \\ 
+  {\text{s\_ptr}}\ar@(d,l)[dr]+(-8,0)&{}&{\phantom{s\_ptr}}&{\phantom{handle2}}
+  \\
+  {}&{\txt{address}}\ar@(u,r)[uul]
+      	{
+	\save
+   [].[]*[F-]\frm{}
+   \restore
+	}
+    	{
+	\save
+   [].[]*+[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{}&{\phantom{s\_ptr}}\\
+}
+\]
+Тогда handle-ы будут хранить \verb"weak_ptr" на данный \verb"shared_ptr".
+\[
+\xymatrix@R=15pt@C=15pt{
+  {\text{host}}
+  	{
+	\save
+   [].[d]*[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{}&{\text{handle1}}
+    	{
+	\save
+   [].[d]*[F-:<3pt>]\frm{}
+   \restore
+	}&{}
+  \\ 
+  {\text{s\_ptr}}\ar@(d,l)[dr]+(-8,0)&{}&{\text{w\_ptr}}\ar@(d,r)[dl]+(8,0)&{\text{handle2}}
+   	{
+	\save
+   [].[d]*[F-:<3pt>]\frm{}
+   \restore
+	}
+  \\
+  {}&{\text{address}}\ar@(u,r)[uul]
+      	{
+	\save
+   [].[]*[F-]\frm{}
+   \restore
+	}
+    	{
+	\save
+   [].[]*+[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{}&{\text{w\_ptr}}\ar@/^10pt/[ll]+(8,-2)\\
+  {}&{}&{\text{handle3}}
+   	{
+	\save
+   [].[d]*[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{}\\
+  {}&{}&{\text{w\_ptr}}\ar@(l,d)[luu]+(0,-3)&{}\\
+}
+\]
+Важно сказать, что host может быть как константным, так и не константным объектом.
+Но адрес всегда хранится как на НЕ константный объект.
+Одна из причин почему это делается так -- возможность создавать одновременно константные и не константные handle-ы на один и тот же объект.
+А потому надо быть осторожным при имплементации, потому что можно случайно получить неконстантный доступ к константному объекту и получить UB.
+Эта опасность НЕ возникает снаружи, когда вы уже будете пользоваться host и handle-ами.
+
+\paragraph{Имплементация методов Host}
+
+\begin{enumerate}
+\item Конструктора.
+Здесь есть две тактики:
+\begin{enumerate}
+\item Явная инициализация.
+В этом случае мы при создании хоста сразу же инициализируем \verb"shared_ptr" с адрессом хоста.
+\[
+\xymatrix@R=15pt@C=15pt{
+  {\text{host}}
+  	{
+	\save
+   [].[d]*[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{}&{\phantom{handle}}
+  \\ 
+  {\text{s\_ptr}}\ar@(d,l)[dr]+(-8,0)
+  &{}&{\phantom{s\_ptr}}\\
+  {}&{\text{address}}\ar@(u,r)[uul]
+      	{
+	\save
+   [].[]*[F-]\frm{}
+   \restore
+	}
+    	{
+	\save
+   [].[]*+[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{}\\
+}
+\]
+\item Ленивая инициализация.
+В этом случае мы не инициализируем \verb"shared_ptr" адресом хоста, а просто создаем пустой \verb"shared_ptr".
+В этом подходе инициализация наступает лишь при создании handle.
+Это позволяет не платить накладные расходы на аллокацию тогда, когда это не нужно.
+\[
+\xymatrix@R=15pt@C=15pt{
+  {\text{host}}
+  	{
+	\save
+   [].[d]*[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{}&{\phantom{handle}}
+  \\ 
+  {\text{s\_ptr}}%\ar@(d,l)[dr]+(-8,0)
+  &{}&{\phantom{s\_ptr}}\\
+}
+\]
+\end{enumerate}
+Я буду использовать ленивую инициализацию.
+
+\item Деструктор.
+Предположим, что мы имеем host-а и к нему прикреплен  handle.
+\[
+\xymatrix@R=15pt@C=15pt{
+  {\text{host}}
+  	{
+	\save
+   [].[d]*[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{}&{\text{handle}}
+    	{
+	\save
+   [].[d]*[F-:<3pt>]\frm{}
+   \restore
+	}
+  \\ 
+  {\text{s\_ptr}}\ar@(d,l)[dr]+(-8,0)&{}&{\text{w\_ptr}}\ar@(d,r)[dl]+(8,0)\\
+  {}&{\text{address}}\ar@(u,r)[uul]
+      	{
+	\save
+   [].[]*[F-]\frm{}
+   \restore
+	}
+    	{
+	\save
+   [].[]*+[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{}\\
+}
+\]
+Тогда при смерти хоста, умирает и \verb"shared_ptr".
+Но тогда у \verb"weak_ptr" есть возможность проверить жив или мертв объект.
+\[
+\xymatrix@R=15pt@C=15pt{
+  {\text{host}}
+  	{
+	\save
+   [].[d]*[F--:<3pt>]\frm{}
+   \restore
+	}
+  &{}&{\text{handle}}
+    	{
+	\save
+   [].[d]*[F-:<3pt>]\frm{}
+   \restore
+	}
+  \\ 
+  {\text{s\_ptr}}&{}&{\text{w\_ptr}}\ar@(d,r)[dl]+(8,0)\\
+  {}&{\phantom{address}}
+      	{
+	\save
+   [].[]*\frm{}
+   \restore
+	}
+    	{
+	\save
+   [].[]*+[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{}\\
+}
+\]
+А потому ничего делать не надо.
+
+\item Перемещающий конструктор.
+Если \verb"shared_ptr" не был инициализирован, то мы просто ничего не делаем.
+Однако, если же \verb"shared_ptr" с адресом был иницилизирован, то надо перезаписать текущий адрес объекта после перемещения.
+То есть если мы стартовали в такой ситуации:
+\[
+\xymatrix@R=15pt@C=15pt{
+  {\text{host}}
+  	{
+	\save
+   [].[d]*[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{}&{\text{handle}}
+    	{
+	\save
+   [].[d]*[F-:<3pt>]\frm{}
+   \restore
+	}
+  \\ 
+  {\text{s\_ptr}}\ar@(d,l)[dr]+(-9,0)&{\phantom{address}}&{\text{w\_ptr}}\ar@(d,r)[dl]+(9,0)\\
+  {}&{\text{address\phantom{2}}}\ar@(u,r)[uul]
+      	{
+	\save
+   [].[]*[F-]\frm{}
+   \restore
+	}
+    	{
+	\save
+   [].[]*+[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{}\\
+}
+\]
+То после перемещения будем иметь
+\[
+\xymatrix@R=15pt@C=15pt{
+  {\text{host}}
+  	{
+	\save
+   [].[d]*[F--:<3pt>]\frm{}
+   \restore
+	}
+  &{}&{\text{handle}}
+    	{
+	\save
+   [].[d]*[F-:<3pt>]\frm{}
+   \restore
+	}
+  \\ 
+  {\text{s\_ptr}}&{\phantom{address}}&{\text{w\_ptr}}\ar@(d,r)[dl]+(9,0)\\
+  {}&{\text{\color{red}address2}}\ar@(l,u)[ld]
+      	{
+	\save
+   [].[]*[F-]\frm{}
+   \restore
+	}
+    	{
+	\save
+   [].[]*+[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{}\\
+  {\text{host}}
+  {
+	\save
+   [].[d]*[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{}&{}\\
+  {\text{s\_ptr}}\ar@(r,d)[uur]-(0,3)&{}&{}\\
+}
+\]
+
+
+\item Перемещающее присваивание.
+В этом случае мы хотим переместить объект не в новое место в памяти, а в уже существующий объект.
+А потому в начале надо этот существующий объект убить.
+Так же надо разобрать случаи когда \verb"shared_ptr" инициализирован или нет.
+Я рассмотрю интересный случай, когда надо сделать изменение адреса.
+Пусть мы имеем следующую картину
+\[
+\xymatrix@R=15pt@C=15pt{
+  {\text{host1}}
+  	{
+	\save
+   [].[d]*[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{}&{\text{handle1}}
+    	{
+	\save
+   [].[d]*[F-:<3pt>]\frm{}
+   \restore
+	}
+  \\ 
+  {\text{s\_ptr}}\ar@(d,l)[dr]+(-9,0)\ar@{==>}@/_10pt/[dd]<-10pt>&{\phantom{address1}}&{\text{w\_ptr}}\ar@(d,r)[dl]+(9,0)\\
+  {}&{\text{address1}}\ar@(u,r)[uul]
+      	{
+	\save
+   [].[]*[F-]\frm{}
+   \restore
+	}
+    	{
+	\save
+   [].[]*+[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{}\\
+  {\text{host2}}
+  	{
+	\save
+   [].[d]*[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{}&{\text{handle2}}
+    	{
+	\save
+   [].[d]*[F-:<3pt>]\frm{}
+   \restore
+	}
+  \\ 
+  {\text{s\_ptr}}\ar@(d,l)[dr]+(-9,0)&{}&{\text{w\_ptr}}\ar@(d,r)[dl]+(9,0)\\
+  {}&{\text{address2}}\ar@(u,r)[uul]
+      	{
+	\save
+   [].[]*[F-]\frm{}
+   \restore
+	}
+    	{
+	\save
+   [].[]*+[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{}\\
+}
+\]
+После перемещения \verb"host1" на место \verb"host2" поле \verb"shared_ptr" в \verb"host2" просто удалится и значит \verb"handle2" будет видеть удаленный объект.
+После этого надо лишь перезаписать адрес на текущее положение \verb"host1".
+\[
+\xymatrix@R=15pt@C=15pt{
+  {\text{host\phantom{1}}}
+  	{
+	\save
+   [].[d]*[F--:<3pt>]\frm{}
+   \restore
+	}
+  &{}&{\text{handle1}}
+    	{
+	\save
+   [].[d]*[F-:<3pt>]\frm{}
+   \restore
+	}
+  \\ 
+  {\text{s\_ptr}}&{\phantom{address1}}&{\text{w\_ptr}}\ar@(d,r)[dl]+(9,0)\\
+  {}&{\text{\color{red}address2}}\ar@(r,u)[dl]
+      	{
+	\save
+   [].[]*[F-]\frm{}
+   \restore
+	}
+    	{
+	\save
+   [].[]*+[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{}\\
+  {\text{host1}}
+  	{
+	\save
+   [].[d]*[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{}&{\text{handle2}}
+    	{
+	\save
+   [].[d]*[F-:<3pt>]\frm{}
+   \restore
+	}
+  \\ 
+  {\text{s\_ptr}}\ar@(r,d)[ruu]+(0,-3)&{}&{\text{w\_ptr}}\ar@(d,r)[dl]+(9,0)\\
+  {}&{\phantom{address2}}%\ar@(u,r)[uul]
+      	{
+	\save
+   [].[]*\frm{}
+   \restore
+	}
+    	{
+	\save
+   [].[]*+[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{}\\
+}
+\]
+
+\item Создание handle.
+Пусть у нас есть host с еще не инициализированным \verb"shared_ptr".
+\[
+\xymatrix@R=15pt@C=15pt{
+  {\text{host}}
+  	{
+	\save
+   [].[d]*[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{}&{\phantom{handle}}
+  \\ 
+  {\text{s\_ptr}}%\ar@(d,l)[dr]+(-8,0)
+  &{}&{\phantom{s\_ptr}}\\
+}
+\]
+Прежде чем выдать новый handle, надо создать \verb"shared_ptr", в который запишется текущий адрес объекта.
+После чего на этот \verb"shared_ptr" делается \verb"weak_ptr", который складывается в handle.
+\[
+\xymatrix@R=15pt@C=15pt{
+  {\text{host}}
+  	{
+	\save
+   [].[d]*[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{}&{\text{handle1}}
+    	{
+	\save
+   [].[d]*[F-:<3pt>]\frm{}
+   \restore
+	}&{}
+  \\ 
+  {\text{s\_ptr}}\ar@(d,l)[dr]+(-8,0)&{}&{\text{w\_ptr}}\ar@(d,r)[dl]+(8,0)&{\text{handle2}}
+   	{
+	\save
+   [].[d]*[F-:<3pt>]\frm{}
+   \restore
+	}
+  \\
+  {}&{\text{address}}\ar@(u,r)[uul]
+      	{
+	\save
+   [].[]*[F-]\frm{}
+   \restore
+	}
+    	{
+	\save
+   [].[]*+[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{}&{\text{w\_ptr}}\ar@/^10pt/[ll]+(8,-2)\\
+  {}&{}&{\text{handle3}}
+   	{
+	\save
+   [].[d]*[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{}\\
+  {}&{}&{\text{w\_ptr}}\ar@(l,d)[luu]+(0,-3)&{}\\
+}
+\]
+\end{enumerate}
+
+\paragraph{Имплементация Handle}
+
+На удивление имплементация handle не содержит каких-то интересных деталей.
+Поэтому можно сразу переходить к разделу~\ref{section::HostHandleImpl}, где представлена имплементация в коде.
+
+\subsubsection{Разные интерфейсы}
+
+Подход с host/handle позволяет не просто делать ручку, которая умеет следить за хостом.
+Можно так же контролировать какой интерфейс предоставляет данная ручка.
+\[
+\xymatrix@R=15pt@C=15pt{
+  {\text{host}}
+  	{
+	\save
+   [].[d]*[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{}&{\text{handle1}}\ar@{}[d]|{\text{\color{red}Interface1}}
+    	{
+	\save
+   [].[d]*[F-:<3pt>]\frm{}
+   \restore
+	}&{}
+  \\ 
+  {\text{s\_ptr}}\ar@(d,l)[dr]+(-8,0)&{}&{\text{w\_ptr}}\ar@(d,r)[dl]+(8,0)&{\text{handle2}}\ar@{}[d]|{\text{\color{red}Interface2}}
+   	{
+	\save
+   [].[d]*[F-:<3pt>]\frm{}
+   \restore
+	}
+  \\
+  {}&{\text{address}}\ar@(u,r)[uul]
+      	{
+	\save
+   [].[]*[F-]\frm{}
+   \restore
+	}
+    	{
+	\save
+   [].[]*+[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{}&{\text{w\_ptr}}\ar@/^10pt/[ll]+(8,-2)\\
+  {}&{}&{\text{handle3}}\ar@{}[d]|{\text{\color{red}Interface3}}
+   	{
+	\save
+   [].[d]*[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{}\\
+  {}&{}&{\text{w\_ptr}}\ar@(l,d)[luu]+(0,-3)&{}\\
+}
+\]
+Вот как это могло бы выглядеть в коде.
+У нас может быть класс \verb"A", к которому мы хотим присоединить два интерфейса.
+\begin{center}
+\begin{tabular}{cc}
+{
+\begin{minipage}[\baselineskip]{8cm}
+\begin{cppcode}[numbers = none]
+class A : public Host<A> {
+public:
+  void f() const;
+  void g();
+  void h() const;
+  void w();
+  
+private:
+  ...
+};
+
+
+
+
+\end{cppcode}
+\end{minipage}
+}&{
+\begin{minipage}[\baselineskip]{8cm}
+\begin{cppcode}[numbers = none]
+class Interface1 {
+public:
+  void f() const;
+private:
+  ...
+};
+
+class Interface2 {
+public:
+  void g();
+  void h() const;
+private:
+  ...
+};
+\end{cppcode}
+\end{minipage}
+}\\
+\end{tabular}
+\end{center}
+Тогда можно ожидать такое использование
+\begin{cppcode}
+A a;
+Handle<Interface1> h1 = a.handle();
+ConstHandle<Interface2> h2 = a.handle();
+          
+h1->f();// OK
+h1->g();// Compilation Error
+h1->h();// Compilation Error
+  
+h2->f();// Compilation Error
+h2->g();// Compilation Error
+h2->h();// OK
+
+h1 = h2;// Compilation Error
+h2 = h1;// Compilation Error
+\end{cppcode}
+Теперь ручка контролирует не только const correctness, но и предоставляемый интерфейс.
+При этом ручки с разными интерфейсами не конвертируются друг в друга.
+Последняя мысль подсказывает, что можно сделать иерархию интерфейсов, чтобы более широкие могли конвертироваться к более узким.
+Например как-то так.
+\begin{center}
+\begin{tabular}{cc}
+{
+\begin{minipage}[\baselineskip]{8cm}
+\begin{cppcode}[numbers = none]
+class A : public Host<A> {
+public:
+  void f() const;
+  void g();
+  void h() const;
+  void w();
+  
+private:
+  ...
+};
+
+
+
+\end{cppcode}
+\end{minipage}
+}&{
+\begin{minipage}[\baselineskip]{8cm}
+\begin{cppcode}[numbers = none]
+class Interface1 {
+public:
+  void f() const;
+private:
+  ...
+};
+
+class Interface2 : public Interface1 {
+public:
+  void h() const;
+private:
+  ...
+};
+\end{cppcode}
+\end{minipage}
+}\\
+\end{tabular}
+\end{center}
+Тогда ожидаемое использование будет выглядеть так.
+\begin{cppcode}
+A a;
+Handle<Interface1> h1 = a.handle();
+Handle<Interface2> h2 = a.handle();
+          
+h1->f();// OK
+h1->g();// Compilation Error
+h1->h();// Compilation Error
+  
+h2->f();// OK
+h2->g();// Compilation Error
+h2->h();// OK
+
+h1 = h2;// OK
+h2 = h1;// Compilation Error
+\end{cppcode}
+И как вы видите теперь есть конвертация между ручками в одну сторону.
+
+Теперь остается вопрос: кто решает какой интерфейс выдавать.
+Это можно делать на стороне хоста или на стороне ручки.
+\begin{center}
+\begin{tabular}{cc}
+{\textbf{На стороне пользователя}}&{\textbf{На стороне хоста}}\\
+{
+\begin{minipage}[\baselineskip]{8cm}
+\begin{cppcode}[numbers = none]
+A a;
+Handle<Interface1> h1 = a.handle();
+Handle<Interface2> h2 = a.handle();
+\end{cppcode}
+\end{minipage}
+}&{
+\begin{minipage}[\baselineskip]{9cm}
+\begin{cppcode}[numbers = none]
+A a;
+auto h1 = a.handle<Interface1>();
+Handle<Interface2> h2 = a.handle<Interface2>();
+\end{cppcode}
+\end{minipage}
+}\\
+{
+\begin{minipage}[\baselineskip]{8cm}
+Здесь \verb"handle" решает какой интерфейс запросить.
+\end{minipage}
+}&{
+\begin{minipage}[\baselineskip]{8cm}
+Здесь \verb"host" решает какой интерфейс отдать.
+\end{minipage}
+}
+\end{tabular}
+\end{center}
+
+\subsubsection{Имплементация}
+\label{section::HostHandleImpl}
+
+\paragraph{Host}
+
+Начнем с описания того, как будет выглядеть хост.
+\begin{cppcode}
+template<class T>
+class Host {
+protected:
+  Host() = default;
+  Host(const Host&) = delete;
+  Host(Host&&) noexcept;
+  Host& operator=(const Host&) = delete;
+  Host& operator=(Host&&) noexcept;
+  ~Host() = default;
+public:
+  Handle handle();
+  ConstHandle handle() const;
+  ConstHandle chandle() const;
+  void detach();
+  T* ptr();
+  const T* ptr() const;
+  T& ref();
+  const T& ref() const;
+private:
+  shared_ptr<T*> host_address_;
+};
+\end{cppcode}
+Давайте обратим внимание на некоторые особенности класса.
+Все дефолтные методы создания, копирования, перемещения и удаления делаются защищенными.
+Это сделано для того, чтобы нельзя было просто создать объект класса \verb"Host<A>".
+От него можно только наследоваться.
+Приватное поле -- адрес текущего объекта.
+Обратите внимание в каком виде хранится адрес.
+Мы предполагаем, что \verb"Host<T>" буде базовым классом для \verb"T".
+А это означает, что реальный адрес объекта должен быть \verb"T*", а не \verb"Host<T>*".
+Когда в базовом классе вы знаете информацию о наследнике, такой подход обычно называется CRTP и обсуждается~\ref{section::CRTP}.
+Публичный интерфейс содержит методы выдачи ручек константных и не константных.
+Методы получения указателя и ссылки на отслеживаемый объект.
+И еще метод для отсоединения всех.
+
+Теперь пройдемся по имплементации методов.
+Из стандартных методов мы удаляем операции копирования, операции перемещения надо имплементировать, а остальные дефолтные.
+Перемещающий конструктор будет выглядеть так.
+\begin{cppcode}
+  Host(Host&& other) noexcept 
+  : host_address_(std::move(other.host_address_)) {
+    if (host_address_)
+      *host_address_ = static_cast<T*>(this);
+  } 
+\end{cppcode}
+То есть мы перемещаем единственное поле \verb"host_address_" и так как у нас ленивая инициализация, то мы записываем туда новый адрес только если адрес был инициализирован.
+
+Теперь идет присваивающее перемещение.
+\begin{cppcode}
+Host& operator=(Host&& other) noexcept {
+  *host_address_ = std::move(other.host_address_);
+  if (host_address_)
+    *host_address_ = static_cast<T*>(this);
+  return *this;
+}
+\end{cppcode}
+То есть мы выполняем дефолтный мув и только если адрес хоста был инициализирован, то мы его перезаписываем.
+
+Теперь имплементация метода выдачи ручек.
+Вначале нам понадобится вспомогательный метод:
+\begin{cppcode}
+static shared_ptr<T*> sharedOn(Host& host) {
+  return make_shared(static_cast<T*>(&host)); } // Downcast
+};
+static shared_ptr<T*> sharedOn(const Host& host) {
+  return make_shared(static_cast<T*>(&const_cast<Host&>(host))); } // Downcast
+};
+\end{cppcode}
+Этот приватный метод позволяет получить \verb"shared_ptr" с адресом на текущий объект, который мы отслеживаем.
+Для этого приходится делать каст базового класса, то есть нашего класса \verb"Host<T>", к наследнику, которым является \verb"T".
+Обратите внимание на имплементацию второго метода.
+Он нужен чтобы в константных методах избавиться от константности адреса \verb"this".
+Если бы мы инициализировали \verb"shared_ptr" в конструкторе всегда, то этой имплементации не понадобилось бы, потому что внутри конструктора объект никогда не константный.
+Однако, ленивая инициализация требует от нас возможности получения адреса на неконстантный объект даже в константных методах.
+Это означает, что при разработке такого класса надо быть аккуратным и убедиться, что вы не получаете UB.
+Но как только вы в этом убедились, то все безопасно.
+Тогда выдача ручек имплементируется так
+\begin{cppcode}
+Handle handle() {
+  if (!host_address_)
+    host_address_ = make_shared(*this);
+  return Handle(host_address_);
+}
+ConstHandle handle() const {
+  if (!host_address_)
+    host_address_ = make_shared(*this);
+  return ConstHandle(host_address_);
+}
+ConstHandle chandle() const {
+  if (!host_address_)
+    host_address_ = make_shared(*this);
+  return ConstHandle(host_address_);
+}
+\end{cppcode}
+Уже конструктор handle преобразует \verb"shared_ptr" в \verb"weak_ptr".
+Метод отсоединения всех ручек имплементируется так.
+\begin{cppcode}
+void detach() {
+  host_address_.reset();
+}
+\end{cppcode}
+Методы доступа к адресу объекта
+\begin{cppcode}
+  T* ptr() {
+    return static_cast<T*>(this);
+  }
+  const T* ptr() const {
+    return static_cast<const T*>(this);
+  }
+  T& ref() {
+    return *ptr();
+  }
+  const T& ref() const {
+    return *ptr();
+  }  
+\end{cppcode}
+Из-за ленивой инициализации мы не обязаны хранить адрес внутри \verb"host_address_".
+И запрос данных из него требует прыжка по памяти.
+Явный каст получается лучше и удобнее.
+
+\paragraph{Опасная деталь}
+
+Напомню про опасную деталь еще раз.
+Мы храним адрес хоста всегда как указатель на неконстантный объект, даже если хост на самом деле константный.
+Давайте посмотрим на следующий код.
+\begin{cppcode}
+class A : public Host<A> {};
+
+int main() {
+  const A a;
+  Handle<A> h1 = a.handle(); // compilation error
+  ConstHandle<A> h2 = a.chandle(); // OK
+  return 0;
+}
+\end{cppcode}
+Как мы видим, из-за того, что \verb"a" константный, мы не можем вызвать метод \verb"handle".
+А так как доступ к хосту есть либо через его методы, либо через handle.
+То const correctness будет соблюдена.
+Мы не сможем создать неконстантную ручку на константного хоста.
+
+\paragraph{Handle}
+
+Теперь посмотрим на имплементацию handle-ов.
+\begin{cppcode}
+template<class T>
+class Handle {
+  friend class Host<T>;
+protected:
+  Handle(weak_ptr<T*> host_address);
+public:
+
+  operator bool() const;
+  bool operator==(nullptr_t) const;
+  bool operator!=(nullptr_t) const;
+  
+  Handle& operator=(nullptr_t);
+  void reset();
+    
+  T* ptr() const;
+  T& ref() const;
+  T* operator->() const;
+private:
+  weak_ptr<T*> host_address_;
+};
+\end{cppcode}
+Обратите внимание, что у \verb"Handle" защищенный конструктор.
+Это сделано для того, чтобы никто кроме \verb"Host" не мог его создать.
+Так как объявлен один конструктор, то дефолтного конструктора нет.
+Операции копирования, перемещения и удаления подходят дефолтные, потому они даже не объявляются.
+Следующие операции проверяют, что \verb"Handle" действительно ссылается на живой объект.
+\begin{cppcode}
+operator bool() const {
+  return !host_address_.expired();
+}
+bool operator==(nullptr_t) const {
+  return !(*this);
+}
+bool operator!=(nullptr_t) const {
+  return *this;
+}
+\end{cppcode}
+Операции сброса ручки.
+\begin{cppcode}
+void reset() {
+  host_address_.reset();
+}
+Handle& operator=(nullptr_t) {
+  reset();
+  return *this;
+}
+\end{cppcode}
+Операции доступа к данным.
+\begin{cppcode}
+T* ptr() const {
+  shared_ptr<T*> host_address = host_address_.lock();
+  if (!host_address)
+    return *host_address;
+  return nullptr;
+}
+T& ref() const {
+  return *ptr();
+}
+T* operator->() const {
+  return ptr();
+}
+\end{cppcode}
+Обратите внимание, что операции доступа к данным не безопасные.
+Кроме того, \verb"weak_ptr" не позволяет обратиться к данным, несмотря на то, что он знает где они лежат.
+Приходится вначале делать конвертацию к \verb"shared_ptr"и только потом дергать данные.
+Можно было бы хранить внутри ручек \verb"shared_ptr", но тогда пришлось бы делать лишнюю работу по занулению указателя хранящегося внутри \verb"shared_ptr" при удалении или перемещении объекта.
+Так же несмотря на то что \verb"Handle"  ссылается на неконстантные данные, все методы доступа у него снабжены \verb"const" квалификатором.
+Это связано с тем, что \verb"const" не пробрасывается сквозь указатели.
+А \verb"Handle" у нас просто умная версия указателя.
+
+Версия \verb"ConstHandle" пишется абсолютно аналогично с двумя маленькими отличиями.
+Первое отличие -- методы доступа возвращают константные ссылки и указатели.
+Второе отличие -- возможность конвертировать \verb"Handle" к \verb"ConstHandle".
+Для этого нужно добавить два конструктора.
+Давайте для полноты картины приведем код класса и имплементацию новых методов.
+\begin{cppcode}
+template<class T>
+class ConstHandle {
+  friend class Host<T>;
+protected:
+  ConstHandle(shared_ptr<T*> host_address);
+public:
+  ConstHandle(const Handle& other);
+  ConstHandle(Handle&& other) noexcept;
+
+  operator bool() const;
+  bool operator==(nullptr_t) const;
+  bool operator!=(nullptr_t) const;
+
+  ConstHandle& operator=(nullptr_t);
+  void reset();
+
+  const T* ptr() const;
+  const T& ref() const;
+  const T* operator->() const;
+private:
+  weak_ptr<T*> host_address_;
+};
+\end{cppcode}
+Операции доступа к данным.
+Тут \verb"const_cast" не обязателен, так как \verb"T*" конвертируется к \verb"const T*".
+Я его добавил для того, чтобы подчеркнуть место, в котором происходит конвертация.
+\begin{cppcode}
+const T* ptr() const {
+  shared_ptr<T*> host_address = host_address_.lock();
+  if (!host_address)
+    return const_cast<const T*>(*host_address);
+  return nullptr;
+}
+const T& ref() const {
+  return *ptr();
+}
+const T* operator->() const {
+  return ptr();
+}
+\end{cppcode}
+И два конструктора от \verb"Handle".
+\begin{cppcode}
+ConstHandle(const Handle& other) : host_address_(other.host_address_) {
+}
+ConstHandle(Handle&& other) noexcept : host_address_(std::move(other.host_address_)) {
+}
+\end{cppcode}
+Эти конструкции работают потому что и \verb"Handle" и \verb"ConstHandle" хранят внутри себя адрес в виде \verb"T*".

@@ -1,0 +1,881 @@
+\ProvidesFile{TypeErasure.tex}[Стирающие типы]
+
+
+\subsection{Стирающие типы}
+\label{section::TypeErasure}
+
+Стирающим типом принято называть тип, который может хранить внутри себя объект любого типа, если у него в интерфейсе есть определенные методы с заданной сигнатурой.
+Стирающий тип в отличии от стирающей ссылки (или указателя) владеет объектом, а не просто ссылается на него.
+В языке сейчас есть небольшая поддержка стирающих типов.
+Вот что нам доступно
+\begin{enumerate}
+\item \verb"std::any" -- это стирающий тип с пустым интерфейсом.
+То есть он умеет в себе хранить объект любого типа.
+При этом корректно работают операции копирования и перемещения и уничтожения.
+Но положив туда данные вы никак не можете ими воспользоваться.
+Точнее вам надо знать что там лежит и после этого вы можете откастовать \verb"std::any" к нужному типу и достать соответствующий объект.
+
+\item \verb"std::function" -- это стирающий тип, который умеет хранить в себе любой объект, для которого определен \verb"operator()" с нужной сигнатурой.
+В отличие от указателя на функцию, внутри \verb"std::function" можно хранить функторы содержащие данные.
+
+\item Указатель на функцию.
+Так как функции существуют во время выполнения программы и они их код менять нельзя при исполнении.
+То указатель на функцию имеет value semantics и ведет себя как будто переменная, в которую вы складываете функцию с указанной сигнатурой.
+
+\item \verb"std::optional" -- это не совсем полноценный стирающий тип.
+Он позволяет положить в него любой объект принадлежащий заранее указанному списку типов.
+И после этого он предоставляет возможность применения операций к объекту, не вынимая его, с помощью visitor паттерна.
+\end{enumerate}
+
+% TO DO
+\subsubsection{Ожидаемое поведение}
+
+Давайте опишем, что бы мы хотели иметь.
+Прежде всего мы хотим описать требуемый интерфейс как-то так:
+\begin{cppcode}
+struct Interface {
+  virtual void f() const = 0;
+  virtual int g(const std::string&) const = 0;
+};
+\end{cppcode}
+Теперь предположим, что у нас есть два класса, которые поддерживают этот интерфейс
+\begin{center}
+\begin{tabular}{ll}
+{
+\begin{minipage}[\baselineskip]{8cm}
+\begin{cppcode}[numbers = none]
+struct A {
+  void f() const;
+  int g(const std::string&) const;
+};
+\end{cppcode}
+\end{minipage}
+}&{
+\begin{minipage}[\baselineskip]{8cm}
+\begin{cppcode}[numbers = none]
+struct B {
+  void f() const;
+  int g(const std::string&) const;
+};
+\end{cppcode}
+\end{minipage}
+}\\
+\end{tabular}
+\end{center}
+Мы хотим уметь хранить объекты обоих классов \verb"A" и \verb"B" в одной и той же переменной и вызывать методы \verb"f" и \verb"g" не зная, какой именно там лежит объект.
+Ожидаемое поведение будет таким:
+\begin{cppcode}
+int main() {
+  Any<Interface> x;
+  x = A();
+  x->f();
+  x = B();
+  std::cout << x->g("123") << std::endl;
+  return 0;
+}
+\end{cppcode}
+Есть два способа имплементировать стирающие типы:
+\begin{enumerate}
+\item Ручной менеджмент таблицами виртуальных функций
+
+\item Использование наследования с виртуальными функциями с шаблонными адаптерами
+\end{enumerate}
+
+Первый способ по сути повторяет идеи описанные в разделе~\ref{section::RefErasure}, где вместо указателя мы будем использовать произвольный класс, а вместо \verb"void*" -- \verb"std::any".
+Потому на \verb"std::any" можно смотреть как на владеющий аналог \verb"void*".
+
+\subsubsection{Идея имплементации}
+\label{section::TypeErasureIdea}
+% TO DO
+Давайте создадим класс \verb"Any", который умеет хранить любой объект, у которого доступны два метода
+\begin{itemize}
+\item \verb"void f() const"
+
+\item \verb"void g(const std::string&) const"
+\end{itemize}
+Тогда структуру \verb"Any" можно графически изобразить так:
+\begin{center}
+\[
+\xymatrix@R10pt{
+  {\verb"Any"}
+    {
+	\save
+   [].[dd]*+[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{\phantom{\verb"Obj"}}
+   {
+	\save
+   [].[]*+[:<3pt>]\frm{}
+   \restore
+	}
+  &{\phantom{\verb"class A"}}
+  %\ar@/_10pt/[l]
+    {
+	\save
+   [].[dd]*+[:<3pt>]\frm{}
+   \restore
+	}
+  \\
+  {\verb"any"}
+   {
+	\save
+   [].[]*+[F-]\frm{}
+   \restore
+	}
+  %\ar[ru]
+  &{}&{\phantom{\verb"void f()"}}
+  %\ar[ldd]+(10,2)
+  \\
+  {\verb"vtable"}
+    {
+	\save
+   [].[]*[F-]\frm{}
+   \restore
+	}
+  \ar@(d,l)[rd]&{}&{\phantom{\verb"void g(...)"}}
+  %\ar[ldd]+(10,2)
+  \\
+  {}&{\verb"Fptr f\_ = nullptr"}
+    {
+	\save
+   [].[d]*[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{}\\
+  {}&{\verb"Fptr g\_ = nullptr"}&{}\\
+}
+\]
+\end{center}
+Объект \verb"Any" будет содержать два поля:
+\begin{enumerate}
+\item Переменная типа \verb"std::any", содержащая данный объект.
+
+\item Указатель \verb"vtable" на таблицу функций, которые мы будем у него вызывать.
+\end{enumerate}
+Теперь если у нас есть объект \verb"Obj" класса \verb"A", который содержит нужные методы
+\begin{center}
+\[
+\xymatrix@R10pt{
+  {\verb"Any"}
+    {
+	\save
+   [].[dd]*+[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{{\verb"Obj"}}
+   {
+	\save
+   [].[]*+[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{{\verb"class A"}}
+  \ar@{-->}@/_10pt/[l]
+    {
+	\save
+   [].[dd]*+[F-:<3pt>]\frm{}
+   \restore
+	}
+  \\
+  {\verb"any"}
+   {
+	\save
+   [].[]*+[F-]\frm{}
+   \restore
+	}
+  %\ar[ru]
+  &{}&{{\verb"void f()"}}
+  %\ar[ldd]+(10,2)
+  \\
+  {\verb"vtable"}
+    {
+	\save
+   [].[]*[F-]\frm{}
+   \restore
+	}
+  \ar@(d,l)[rd]&{}&{{\verb"void g(...)"}}
+  %\ar[ldd]+(10,2)
+  \\
+  {}&{\verb"Fptr f\_ = nullptr"}
+    {
+	\save
+   [].[d]*[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{}\\
+  {}&{\verb"Fptr g\_ = nullptr"}&{}\\
+}
+\]
+\end{center}
+То при присваивании объекта \verb"Obj" объекту класса \verb"Any" надо сделать две вещи:
+\begin{enumerate}
+\item Положить объект \verb"Obj" или его копию внутрь \verb"std::any" поля внутри \verb"Any".
+
+\item Положить в таблицу \verb"vtable" указатели на методы \verb"f" и \verb"g" из класса \verb"A", которому принадлежит объект \verb"Obj".
+\end{enumerate}
+\begin{center}
+\[
+\xymatrix@R10pt{
+  {\verb"Any"}
+    {
+	\save
+   [].[dd]*+[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{{\verb"Obj"}}
+   {
+	\save
+   [].[]*+[F-:<3pt>]\frm{}
+   \restore
+	}
+	\ar@[red][ld]
+  &{{\verb"class A"}}
+  %\ar@{-->}@/_10pt/[l]
+    {
+	\save
+   [].[dd]*+[F-:<3pt>]\frm{}
+   \restore
+	}
+  \\
+  {\verb"any"}
+   {
+	\save
+   [].[]*+[F-]\frm{}
+   \restore
+	}
+  %\ar[ru]
+  &{}&{{\verb"void f()"}}
+  \ar@[red][ldd]+(10,2)
+  \\
+  {\verb"vtable"}
+    {
+	\save
+   [].[]*[F-]\frm{}
+   \restore
+	}
+  \ar@(d,l)[rd]&{}&{{\verb"void g(...)"}}
+  \ar@[red][ldd]+(10,2)
+  \\
+  {}&{\verb"Fptr f\_ = nullptr"}
+    {
+	\save
+   [].[d]*[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{}\\
+  {}&{\verb"Fptr g\_ = nullptr"}&{}\\
+}
+\]
+\end{center}
+Технически, так как методы \verb"f" и \verb"g" зависят от класса \verb"A" и для всех объектов класса \verb"A" они будут одинаковые, то нет необходимости для каждого объекта хранить на куче свою таблицу.
+Вместо этого для класса \verb"A" заведем одну статическую таблицу и будем хранить указатель на нее.
+
+\subsubsection{Имплементация}
+\label{section::TypeErasureImpl}
+% TO DO
+
+Здесь мы по сути повторяем то, как имплементирован механизм с виртуальными функциями.
+Однако, объект класса будет приниматься не по \verb"void*", а по ссылке на \verb"std::any".
+
+\paragraph{Виртуальные таблицы}
+
+В начале надо заменить методы на глобальные функции, чтобы у нас не было зависимости от типа \texttt{A}.
+Делается это так:
+\begin{center}
+\begin{tabular}{ll}
+{
+\begin{minipage}[\baselineskip]{8cm}
+\begin{cppcode}[numbers = none]
+struct A {
+  void f() const;
+  void g(const std::string&) const;
+};
+\end{cppcode}
+\end{minipage}
+}&{
+\begin{minipage}[\baselineskip]{8cm}
+\begin{cppcode}[numbers = none]
+
+void f_(const A* self);
+void g_(const A* self, const std::string&);  
+
+\end{cppcode}
+\end{minipage}
+}\\
+\end{tabular}
+\end{center}
+Теперь заведем структуру, в которой будут лежать указатели на данные функции:
+\begin{center}
+\begin{minipage}[\baselineskip]{11.2cm}
+\begin{cppcode}
+struct VTable {
+  using FSignature = void(const std::any&);
+  using GSignature = void(const std::any&, const std::string&);
+
+  FSignature* f_ = nullptr;
+  GSignature* g_ = nullptr;
+};
+\end{cppcode}
+\end{minipage}
+\end{center}
+Обратите внимание, что настоящий тип функции \texttt{f\_} есть \texttt{void(const A*)}.
+Однако, в таблице будет лежать функция с сигнатурой \texttt{void(const std::any\&)}.
+А значит, нам надо будет сделать несколько вспомогательных действий.
+Давайте заведем шаблонный класс, который будет хранить статическую таблицу.
+\begin{center}
+\begin{minipage}[\baselineskip]{12cm}
+\begin{cppcode}
+template<class T>
+struct Bind {
+static void f_(const std::any& self) {
+  std::any_cast<const T&>(self).f();
+}
+static void g_(const std::any& self, const std::string& str) {
+  std::any_cast<T&>(self).g(str);
+}
+
+static constexpr VTable vtable{f_, g_};
+};
+
+template<>
+struct Bind<void> {
+
+static constexpr VTable vtable{nullptr, nullptr};
+};
+\end{cppcode}
+\end{minipage}
+\end{center}
+Здесь для каждого типа \texttt{T} мы можем создать структуру \texttt{Bind<T>}.%
+\footnote{Название пожалуй не лучшее, но я не знаю как его еще назвать.}
+Внутри этой структуры мы биндим настоящие методы из класса \texttt{T} (который будет \texttt{A} в нашем примере выше).
+Этот бинд делается в строках 3-5 для метода \texttt{T::f()} и в строках 6-8 для метода \texttt{T::g(...)}.
+После чего мы создаем статическую переменную \texttt{vtable} внутри этой структуры, которая будет хранить виртуальную таблицу на забинденные методы.
+Таким образом \texttt{Bind<T>::vtable} -- это будет таблица с методами для указателя на объект типа \texttt{T}.
+Обратите внимание, что мы принимаем объект \texttt{self} в формате \texttt{const std::any\&}, потому что внутри \texttt{Any} он хранится внутри поля типа \texttt{std::any}.
+Но так как таблица с методами и указатель на объект согласованы, мы знаем, что всегда можно кастовать с помощью \texttt{any\_cast} переменную \texttt{self} в тип \texttt{T\&} или \texttt{const T\&}.
+Таким образом мы получаем доступ к настоящим методам \texttt{f} и \texttt{g} из класса \texttt{T}.
+И если в классе \texttt{T} нет возможности вызвать эти методы как в строках 4 и 7, то произойдет ошибка компиляции.
+Это хорошо, потому что это означает, что мы пытаемся использовать класс \texttt{T} не поддерживающий нужные методы и компилятор нашел нашу ошибку.
+После общего определения идет специализация для таблицы для типа \texttt{void}, который используется как sentinel и означает, что эта таблица ни на что не забиндилась.
+
+\paragraph{Имплементация \texttt{Any}}
+
+Теперь когда мы определились с тем, как устроен вспомогательный класс для работы с таблицами функций, давайте опишем как будет выглядеть основной класс \texttt{Any}.
+В начале опишем его методы и данные, а потом уже напишем имплементацию всех методов:
+\begin{cppcode}
+class Any {
+public:
+  Any();
+  template<class T>
+  Any(T&& obj);
+
+  Any(const Any& other);
+  Any& operator=(const Any& other);
+
+  Any(Any&& other) noexcept;
+  Any& operator=(Any&& other) noexcept;
+  ~Any();
+
+  bool has_value() const;
+
+  void f() const;
+  void g(const std::string&) const;
+
+private:
+  void clear();
+
+  const VTable* vtable_ = &Bind<void>::vtable;
+  std::any obj_;
+};
+\end{cppcode}
+Как мы видим в классе лежат только два поля:
+\begin{enumerate}
+\item \texttt{vtable\_} указывает на таблицу функций.
+По умолчанию ссылается на пустую таблицу функций определенную для типа \texttt{viod}.
+
+\item \texttt{obj\_} содержит объект, у которого мы будем вызывать нужные методы.
+По умолчанию ничего не содержит, а потому мы поддерживаем метод проверки лежит ли что-либо внутри \texttt{Any}.
+\end{enumerate}
+В начале разберемся с вопросами обеспечения правильной семантики для \texttt{Any}.
+Поле типа \texttt{std::any} уже обладает нужным поведением.
+Проблема есть с \texttt{VTable*}.
+Оно конечно обладает value semantics, но методы перемещения надо прописать вручную, потому что мы хотим очистить данные из объекта из которого мы проделали мув.
+Для этого имплементируем все конструкторы, деструктор и операторы присваивания.
+Я в начале сгруппирую дефолтные конструкторы, а уже после них те, что требуют ручной имплементации.
+\begin{cppcode}
+  Any() = default;
+  Any(const Any& other) = default;
+  Any& operator=(const Any& other) = default;
+  ~Any() = default;
+
+  Any(Any&& other) noexcept
+      : vtable_(std::exchange(other.vtable_, &Bind<void>::vtable)),
+        obj_(std::exchange(other.obj_, std::any())) {
+  }
+  
+  Any& operator=(Any&& other) noexcept {
+    Any tmp = std::move(other);
+    std::swap(vtable_, tmp.vtable_);
+    std::swap(ptr_, tmp.ptr_);
+    return *this;
+  }
+  
+  template<class T>
+  Any(T&& obj) : vtable_(&Bind<T>::vtable), obj_(std::forward<T>(obj)) {
+  }
+\end{cppcode}
+Дефолтный конструктор настраивается путем инициализации полей класса.
+Как я писал выше деструктор, конструктор копирования и копирующее присваивание подойдут дефолтными.
+Мувающие операции вынимают данные из предыдущего \texttt{Any}.
+То есть я хочу достичь поведения
+\begin{cppcode}
+A a;
+Any obj1 = a;
+Any obj2 = std::move(obj1);
+Any obj3;
+obj3 = std::move(obj2);
+\end{cppcode}
+Я хочу, чтобы в строке 3 объект \texttt{obj1} передавал свое содержимое внутрь \texttt{obj2}.
+Аналогично в строке 5 хочу, чтобы объект \texttt{obj2} передавал свое содержимое внутрь \texttt{obj3}.
+А для этого нужно сделать очистку данных в старом объекте в мувающем конструкторе и операторе присваивания.
+Тут используются стандартные имплементации, которые обсуждались в разделе~\ref{section::siximpl}.
+
+И остался последний конструктор -- от произвольного типа объект, чтобы мы могли написать
+\begin{cppcode}
+Any x = A();
+Any y = B();
+\end{cppcode}
+При этом важное замечание, если мы напишем
+\begin{cppcode}
+Any x;
+Any y = x;
+\end{cppcode}
+то сработает копирующий конструктор, который мы явно прописали.
+В этом случае компилятор всегда отдает приоритет нешаблонному методу по сравнению с шаблонным.
+Если бы мы не определили явно копирующий конструктор через \texttt{default} у нас были бы проблемы в этом случае.
+
+Теперь напишем имплементацию оставшихся методов:
+\begin{cppcode}
+  bool has_value() const {
+    return obj_.has_value() && vtable_->f_ != nullptr && vtable_->g_ != nullptr;
+  }
+
+  void f() const {
+    vtable_->f_(obj_);
+  }
+  
+  void g(const std::string& str) const {
+    vtable_->g_(obj_, str);
+  }
+\end{cppcode}
+Метод \texttt{has\_value} нужен, чтобы проверять лежит ли что-то сейчас внутри \texttt{Any} или нет.%
+\footnote{Для имплементации достаточно было бы проверить, то \texttt{obj\_.has\_value()}, но я хотел подчеркнуть, что мне важно, чтобы все указатели были не нулевыми.
+В реальном коде, можно оставить лишь одну проверку для \texttt{obj\_} потому что у нас есть инвариант, что для не пустого \texttt{obj\_} указатели на обе функции тоже не нулевые и корректные.}
+И методы \texttt{f} и \texttt{g} являются самым важным элементом публичного интерфейса -- это те методы, которые позволяют вызвать нужные методы \texttt{f} и \texttt{g} на объекте хранимом внутри \texttt{obj\_}.
+Как видите, это происходит через вызов метода по указателю из текущей таблицы.
+Теперь можно писать такой код
+\begin{cppcode}
+A a;
+Any obj = a;
+obj.f();
+obj.g("abc");
+B b;
+obj = b;
+obj.f();
+obj.g("123");
+\end{cppcode}
+
+
+\subsubsection{Общее шаблонное решение}
+% TO DO
+
+%\subsubsection{SOO}
+% TO DO
+% Сюда?
+
+\subsubsection{Идея ленивого решения}
+% TO DO
+Выше я описал имплементацию для стирающих типов, не использующую виртуальные функции и наследование.
+По сути мы руками делаем работу, которую за нас может сделать язык и компилятор.
+Давайте я опишу здесь альтернативную имплементацию, которая не требует руками возиться с таблицами виртуальных функций.
+
+Давайте начнем со следующего вопроса.
+Пусть у нас задан интерфейс  и класс, который удовлетворяет этому интерфейсу, но не унаследованный от него:
+\begin{center}
+\begin{tabular}{ll}
+{
+\begin{minipage}[\baselineskip]{8cm}
+\begin{cppcode}[numbers = none]
+struct Concept {
+  virtual ~Concept() = default;
+  virtual void f() const = 0;
+  virtual void g(const std::string&) const = 0;
+};
+\end{cppcode}
+\end{minipage}
+}&{
+\begin{minipage}[\baselineskip]{8cm}
+\begin{cppcode}[numbers = none]
+class A {
+public:
+  void f() const;
+  void g(const std::string&) const;
+};
+\end{cppcode}
+\end{minipage}
+}\\
+\end{tabular}
+\end{center}
+Вопрос, как присоединить этот класс к интерфейсу?
+Для этого можно воспользоваться адаптером между интерфейсом и нужным классом.
+В качестве адаптера будет использоваться вспомогательный класс \verb"Model", который будет унаследован от интерфейса \verb"Concept", будет хранить в себе объект класса \verb"A", и его задача будет организовать проброс вызовов для виртуальных методов.
+\[
+\xymatrix{
+  {\texttt{Concept}}
+      {
+	\save
+   [].[]*+[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{}\\
+  {\texttt{Model}}\ar[u]+(0,-4)
+      {
+	\save
+   [].[d]*+[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{}\\
+  {\texttt{A}}
+    {
+	\save
+   [].[]*[F-]\frm{}
+   \restore
+	}
+  &{}\\
+}
+\]
+В коде это выглядит так
+\begin{cppcode}
+struct Concept {
+  virtual ~Concept() = default;
+  virtual void f() const = 0;
+  virtual void g(const std::string&) const = 0;
+};
+
+template<class T>
+class Model : public Concept {
+public:
+  Model(const T& data) : data_(data) {}
+  Model(T&& data) : data_(std::move(data)) {}
+  
+  void f() const final {
+    data_.f();
+  }
+  
+  void g(const std::string& str) const final {
+    data_.g(str);
+  }
+private:
+  T data_;
+};
+\end{cppcode}
+Теперь мы можем следующим образом хранить любые данные в единой переменно
+\begin{cppcode}
+int main() {
+  A a;
+  std::unique_ptr<Concept> model = std::make_unique<Model<A>>(std::move(a));
+  model->f();
+  model->g("abc");
+  return 0;
+}
+\end{cppcode}
+
+\subsubsection{Имплементация ленивого решения}
+% TO DO
+
+Теперь опишем, как собрать класс \verb"Any", используя идею из предыдущего раздела.
+Опишем его интерфейс
+\begin{cppcode}
+class Any {
+public:
+  template<class T>
+  Any(T&& object);
+
+  Any() = default;
+  Any(const Any&);
+  Any(Any&&) = default;
+  Any& operator=(const Any&);
+  Any& operator=(Any&&) = default;
+  ~Any() = default;
+  
+  const Concept* operator->() const;
+  Concept* operator->();
+  
+  operator bool() const;
+private:
+  std::unique_ptr<Concept> model_;
+};
+\end{cppcode}
+Теперь напишем, как эти методы имплементируются.
+В начале методы публичного интерфейса
+\begin{cppcode}
+const Concept* operator->() const {
+  return model_.get();
+}
+Concept* operator->() {
+  return model_.get();
+}
+operator bool() const {
+  return model_.operator bool();
+}
+\end{cppcode}
+Обратите внимание, что оператор \verb"operator->" пробрасывает константность.
+Это связано с тем, что мы хотим, чтобы константность \verb"Any" означало константность данных внутри.
+
+Теперь конструкторы.
+В начале конструктор для помещения объекта внутрь \verb"Any"
+\begin{cppcode}
+template<class T>
+Any(T&& object) : model_(std::make_unique<Model<T>>(std::forward<T>(object))) {}
+\end{cppcode}
+Перемещающие методы и деструктор можно оставить по умолчанию.
+А вот копирование придется писать руками, так как по умолчанию \verb"std::unique_ptr" не имеет операции копирования.
+Здесь придется виртуализовать копирование.
+То есть добавить в интерфейс \verb"Concept" метод копирования.
+Давайте начнем с изменения класса \verb"Concept".
+\begin{cppcode}
+class Concept {
+public:
+  virtual void f() const = 0;
+  virtual void g(const std::string&) const = 0;
+protected:
+  ~Concept() = default;
+private:
+  virtual std::unique_ptr<Concept> make_copy_() const = 0;
+  friend class Any;
+};
+\end{cppcode}
+Обратите внимание, что у \verb"Any" оператор \verb"operator->" возвращает указатель на \verb"Concept".
+А мы не хотим, чтобы пользователь мог воспользоваться служебными методами.
+Поэтому все служебные методы такие как копирование и деструктор, мы прячем.
+Но с другой стороны, \verb"Any" должен быть способен позвать метод \verb"make_copy_".
+А потому его надо сделать \verb"friend" классом.
+Это хороший пример, когда нужно ключевое слово \verb"friend".
+Дело в том, что два класса тесно взаимодействуют друг с другом и хотя поддерживать один инвариант -- данное внутри \verb"model_" переменной.
+При этом \verb"Any" пользуется этим доступом только в копирующем конструкторе и нигде больше.
+Теперь опишем как изменится модель
+\begin{cppcode}
+template<class T>
+class Model : public Concept {
+  std::unique_ptr<Concept> make_copy_() const final {
+    return std::make_unique<Model>(data_);
+  }
+public:
+  Model(consst T& data) : data_(data) {}
+  Model(T&& data) : data_(std::move(data)) {}
+  void f() const final {
+    data_.f();
+  }
+  void g(const std::string& str) const final {
+    data_.g(str);
+  }
+private:
+  T data_;
+};
+\end{cppcode}
+Теперь копирующие операции для \verb"Any" выглядят так
+\begin{cppcode}
+Any(const Any& other)
+  : model_((other ? other->make_copy_() : nullptr)) {}
+Any& operator=(const Any& other) {
+  return *this = Any(other);
+}
+\end{cppcode}
+
+
+\subsubsection{Общая шаблонная версия ленивого решения}
+% TO DO
+Теперь давайте посмотрим, как сделать предыдущее решение общим, чтобы оно работало для любого интерфейса, а не только для указанных двух методов с указанными именами и сигнатурами.
+Давайте поймем, что у нас есть сейчас:
+\begin{center}
+\[
+\xymatrix{
+  {\verb"Concept"}
+      	{
+	\save
+   [].[]*+[F-:<3pt>]\frm{}
+   \restore
+	}
+	%\ar[u]
+	&{}&{\text{Интерфейс для оператора \verb"->" в Any}}\\
+  {{\verb"Model"}\vphantom{\verb"Keeper"}}
+      	{
+	\save
+   [].[]*+[F-:<3pt>]\frm{}
+   \restore
+	}
+	\ar[u]+(0, -4)
+	&{}&{\text{Хранит данные и}\text{ биндит метод}}\\
+}
+\]
+\end{center}
+Теперь мы распилим этот класс на следующие компоненты
+\begin{center}
+\[
+\xymatrix{
+   {{\verb"IEmpty"}}
+  	{
+	\save
+   [].[]*+[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{}&{{\text{Виртуальный деструктор по умолчанию}}}\\
+  {{\verb"Interface"}}
+      	{
+	\save
+   [].[]*+[F--:<3pt>]\frm{}
+   \restore
+	}
+	\ar[u]+(0, -4)
+	&{}&{{\text{Интерфейс от пользователя}}}\\
+  {\verb"Concept"}
+      	{
+	\save
+   [].[]*+[F-:<3pt>]\frm{}
+   \restore
+	}
+	\ar[u]+(0, -3)
+	&{}&{\text{Интерфейс для оператора \verb"->" в Any}}\\
+  {{\verb"Keeper"}}
+      	{
+	\save
+   [].[]*+[F-:<3pt>]\frm{}
+   \restore
+	}
+	\ar[u]+(0, -4)
+	&{}&{\text{Хранит данные и дает доступ}}\\
+  {{\verb"Impl"}}
+      	{
+	\save
+   [].[]*+[F--:<3pt>]\frm{}
+   \restore
+	}
+	\ar[u]+(0, -4)
+	&{}&{{\text{Бинд интерфейса от пользователя}}}\\
+}
+\]
+\end{center}
+На этой диаграмме пунктиром отмечены классы, которые мы будем настраивать.
+А сплошными отмечены классы, которые надо будет написать.
+Давайте опишем роли этих классов
+\begin{enumerate}
+\item \verb"IEmpty".
+Задача этого класса -- избавить пользователя от необходимости самостоятельно указывать в интерфейсе виртуальный деструктор.
+Это позволит не обременять пользователя лишней работой и избежать ошибок в программе, при отсутствии виртуального деструктора.
+
+\item \verb"Interface".
+Это шаблон, который предоставляет пользователь, описывающий интерфейс нужного стирающего типа.
+
+\item \verb"Concept".
+Это интерфейс, который возвращается по оператору \verb"operator->" в классе \verb"Any".
+
+\item \verb"Keeper".
+Данный класс хранит сам объект и дает доступ к нему.
+
+\item \verb"Impl".
+Этот шаблон предоставляет пользователь.
+Его задача пробросить виртуальные вызовы и назначить их на нужные методы внутри хранимого объекта.
+\end{enumerate}
+Вот как выглядит имплементация этих классов в коде.
+\begin{cppcode}
+template<template<class> class IAny, template<class> class Impl>
+class Any;
+
+class IEmpty {
+protected:
+  virtual ~IEmpty() = default;
+};
+
+class Concept : public IAny<IEmpty> {
+  std::unique_ptr<Concept> make_copy_() const = 0;
+  friend class Any;
+};
+
+template<class T>
+class Keeper : public Concept {
+  std::unique_ptr<Concept> make_copy_() const final {
+    return std::make_unique<Impl<Keeper<T>>>(data_);
+  }
+public:
+  Keeper(const T& data) : data_(data) {}
+  Keeper(T&& data) : data_(std::move(data)) {}
+protected:
+  T& object() { return data_; }  
+  const T& object() const { return data_; }
+private:
+  T data_;
+};
+\end{cppcode}
+Метод \verb"object" нужен для того, чтобы можно было получить доступ к данным в \verb"Impl", когда мы будем биндить виртуальные методы на методы класса.
+Теперь в класс \verb"Any" нужно внести следующие изменения
+\begin{cppcode}
+template<template<class> class IAny, template<class> class Impl>
+class Any {
+public:
+  template<class T>
+  Any(T&& data)
+    : model_(std::make_unique<Impl<Keeper<T>>>(std::forward<T>(data))) {}
+  /* default methods */
+  Concept* operator->();
+  const Concept* operator->() const;
+  operator bool() const;
+private:
+  std::unique_ptr<Concept> model_;
+};
+\end{cppcode}
+Теперь пользователь должен предоставить два класса
+\begin{cppcode}
+template<class IEmpty>
+class IAny : public IEmpty {
+public:
+  virtual void f() const = 0;
+  virtual void g(const std::string&) const = 0;
+};
+
+template<class Keeper>
+class Impl : public Keeper {
+public:
+  using Keeper::Keeper;
+  void f() const final {
+    Keeper::object().f();
+  }
+  void g(const std::string& str) const final {
+    Keeper::object.g(str);
+  }
+};
+\end{cppcode}
+Тут важно обратить внимание, что надо в классе \verb"Impl" пробросить конструкторы из класса \verb"Keeper", что делается в строчке~11.
+Теперь можно пользоваться этим следующим образом
+\begin{cppcode}
+using AnyFG = Any<IAny, Impl>;
+
+struct A {
+  void f() const {}
+  void g(const std::string&) const {}
+};
+
+struct B {
+  void f() const {}
+  void g(const std::string&) const {}
+};
+
+int main() {
+  AnyFG x = A();
+  x->f();
+  x->g("abc");
+  x = B();
+  x->f();
+  x->g("abc");
+  return 0;
+}
+\end{cppcode}

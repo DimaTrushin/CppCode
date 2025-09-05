@@ -1,0 +1,680 @@
+\ProvidesFile{Classic.tex}[Стирающие ссылки]
+
+
+\subsection{Стирающие ссылки}
+\label{section::RefErasure}
+
+Так получилось, что даже в языке Си есть стирающие указатели.
+Это называется \texttt{void*}.
+Действительно, вы можете кастануть указатель на любой класс \texttt{A*} в указатель типа \texttt{void*}.
+Однако, это стирающий тип с пустым интерфейсом в том смысле, что у вас нет возможности воспользоваться никакими методами этого класса.
+Все что вы можете -- это кастануть обратно к исходному типу и лишь после этого воспользоваться данными по указателю.
+То есть в языке уже есть стирающий указатель, но с пустым интерфейсом, и теперь наша задача поверх него сделать стирающий указатель но с фиксированным интерфейсом.
+
+\subsubsection{Ожидаемое поведение}
+
+\paragraph{Что мы хотим}
+
+В идеале мы хотим следующее поведение.
+\begin{center}
+\begin{tabular}{cc}
+{
+\begin{minipage}[\baselineskip]{9cm}
+\begin{cppcode}[numbers = none]
+interface A {
+public:
+  void f(int) const;
+};
+
+class B {
+public:
+   void f(int) const { /*implementation*/ }
+};
+\end{cppcode}
+\end{minipage}
+}&{
+\begin{minipage}[\baselineskip]{5cm}
+\begin{cppcode}[numbers = none]
+void g(A a) {
+  a.f(5); // a->f(5);
+}
+
+int main() {
+  B b;
+  g(b); // g(&b);
+  return 0;
+}
+\end{cppcode}
+\end{minipage}
+}\\
+\end{tabular}
+\end{center}
+То есть мы бы хотели задать интерфейс \texttt{A}, который играет роль указателя, такой, что указатель на любой объект (или ссылка на любой объект), который можно использовать с этим интерфейсом биндилась на объект класса \texttt{A}.
+Давайте проговорим все основные пункты этого решения:
+\begin{enumerate}
+\item Нет синтаксической связи между \texttt{A} и \texttt{B}
+
+\item \texttt{A} и \texttt{B} связаны именем функции и сигнатурой
+
+\item Размер \texttt{A} порядка указателя ($\simeq 1-2$ указателя)
+\end{enumerate}
+Опционально можно добавить еще несколько фич:
+\begin{enumerate}
+\item \texttt{A} знает жив ли объект
+
+\item \texttt{A} следит за адресом объекта
+\end{enumerate}
+
+\paragraph{Более правдоподобная картина}
+
+Ключевое слово \texttt{interface} мы будем симулирвоать шаблонным классом, а вот интерфейс настраивать шаблонным параметром.
+Опять же приблизительное идейное решение выглядит так:
+\begin{center}
+\begin{tabular}{cc}
+{
+\begin{minipage}[\baselineskip]{6cm}
+\begin{cppcode}[numbers = none]
+class A {
+public:
+  virtual void f(int) const = 0;
+};
+
+using C = Interface<A>;
+
+class B {
+public:
+   void f(int) const;
+};
+\end{cppcode}
+\end{minipage}
+}&{
+\begin{minipage}[\baselineskip]{4cm}
+\begin{cppcode}[numbers = none]
+
+void g(C a) {
+  a->f(5);
+}
+
+int main() {
+  B b;
+  g(&b);
+  return 0;
+}
+
+\end{cppcode}
+\end{minipage}
+}\\
+\end{tabular}
+\end{center}
+Таким образом:
+\begin{itemize}
+\item Шаблонный класс \texttt{Interface} скрывает весь boilerplate code и симулирует поведение ключевого слова \texttt{interface}
+
+\item Интерфейс вычленяется из адреса объекта (можно настроить)
+
+\item К сожалению прям так пока нельзя, но можно почти так.
+\end{itemize}
+
+\paragraph{Несколько интерфейсов}
+
+Давайте еще немного помечтаем и поймем, какие интересные штуки можно делать.
+Классический подход к получению интерфейса -- взять адрес объекта и кастовать его к адресу базового класса-интерфейса.
+Однако, если у нас теперь интерфейс не привязан к наследованию и механизмам языка, то мы можем просто возвращать интерфейс из метода.
+Причем можно назвать функции возвращающие интерфейс удобным образом и поддерживать много разных интерфейсов.
+\begin{center}
+\begin{tabular}{cc}
+{
+\begin{minipage}[\baselineskip]{6cm}
+\begin{cppcode}[numbers = none]
+class A {
+public:
+  virtual void f(int) const = 0;
+};
+
+using C = Interface<A>;
+
+class B {
+public:
+   void f(int) const;
+   C interface1() const;
+   C interface2() const;
+};
+\end{cppcode}
+\end{minipage}
+}&{
+\begin{minipage}[\baselineskip]{4cm}
+\begin{cppcode}[numbers = none]
+void g(C a) {
+  if(!a)
+    return;
+  a->f(5);
+}
+
+int main() {
+  B b;
+  g(&b);
+  g(b.interface1());
+  g(b.interface2());
+  return 0;
+}
+\end{cppcode}
+\end{minipage}
+}\\
+\end{tabular}
+\end{center}
+Важные моменты:
+\begin{itemize}
+\item Объект может сам предоставлять разные интерфейсы с одинаковыми методами.
+Наследование напрямую не позволяет поддержку такого механизма, но это тоже реализуемо.
+
+\item Объект может контролировать количество созданных интерфейсов.
+Тоже интересная фича, которую можно тут поддержать.
+
+\item Предоставляемый интерфейс $\neq$ Публичный интерфейс.
+То есть у класса может быть свой публичный интерфейс (в смысле публичные методы), а интерфейс, который он предоставляет через метод может быть вполне себе адаптером.
+\end{itemize}
+
+\subsubsection{Идея имплементации}
+\label{section::RefErasureIdea}
+
+Давайте создадим класс \texttt{AnyPtr}, который умеет хранить любой указатель на объект, у которого доступны два метода
+\begin{itemize}
+\item \texttt{void f() const}
+
+\item \texttt{void g()}
+\end{itemize}
+Тогда структуру \texttt{AnyPtr} можно графически изобразить так:
+\begin{center}
+\[
+\xymatrix@R10pt{
+  {\verb"AnyPtr"}
+    {
+	\save
+   [].[dd]*+[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{\phantom{\verb"Obj"}}
+   {
+	\save
+   [].[]*+[:<3pt>]\frm{}
+   \restore
+	}
+  &{\phantom{\verb"class A"}}
+  %\ar@/_10pt/[l]
+    {
+	\save
+   [].[dd]*+[:<3pt>]\frm{}
+   \restore
+	}
+  \\
+  {\verb"ptr"}
+   {
+	\save
+   [].[]*+[F-]\frm{}
+   \restore
+	}
+  %\ar[ru]
+  &{}&{\phantom{\verb"void f()"}}
+  %\ar[ldd]+(10,2)
+  \\
+  {\verb"vtable"}
+    {
+	\save
+   [].[]*[F-]\frm{}
+   \restore
+	}
+  \ar@(d,l)[rd]&{}&{\phantom{\verb"void g()"}}
+  %\ar[ldd]+(10,2)
+  \\
+  {}&{\verb"Fptr f\_ = nullptr"}
+    {
+	\save
+   [].[d]*[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{}\\
+  {}&{\verb"Fptr g\_ = nullptr"}&{}\\
+}
+\]
+\end{center}
+Объект \texttt{AnyPtr} будет содержать два указателя:
+\begin{enumerate}
+\item Указатель \texttt{ptr} в виде \texttt{void*} на объект класса, которым мы хотим пользоваться через указатель.
+
+\item Указатель \texttt{vtable} на таблицу функций, которые мы будем у него вызывать.
+\end{enumerate}
+Теперь, если у нас есть объект \texttt{Obj} класса \texttt{A}, который содержит нужные методы
+\begin{center}
+\[
+\xymatrix@R10pt{
+  {\verb"AnyPtr"}
+    {
+	\save
+   [].[dd]*+[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{{\verb"Obj"}}
+   {
+	\save
+   [].[]*+[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{{\verb"class A"}}
+  \ar@{-->}@/_10pt/[l]
+    {
+	\save
+   [].[dd]*+[F-:<3pt>]\frm{}
+   \restore
+	}
+  \\
+  {\verb"ptr"}
+   {
+	\save
+   [].[]*+[F-]\frm{}
+   \restore
+	}
+  %\ar[ru]
+  &{}&{{\verb"void f()"}}
+  %\ar[ldd]+(10,2)
+  \\
+  {\verb"vtable"}
+    {
+	\save
+   [].[]*[F-]\frm{}
+   \restore
+	}
+  \ar@(d,l)[rd]&{}&{{\verb"void g()"}}
+  %\ar[ldd]+(10,2)
+  \\
+  {}&{\verb"Fptr f\_ = nullptr"}
+    {
+	\save
+   [].[d]*[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{}\\
+  {}&{\verb"Fptr g\_ = nullptr"}&{}\\
+}
+\]
+\end{center}
+То при присваивании объекта \texttt{Obj} объекту класса \texttt{AnyPtr} надо сделать две вещи:
+\begin{enumerate}
+\item Присвоить адрес на \texttt{Obj} к указателю \texttt{ptr}.
+
+\item Положить в таблицу \texttt{vtable} указатели на методы \texttt{f} и \texttt{g} из класса \texttt{A}, которому принадлежит объект \texttt{Obj}.
+\end{enumerate}
+\begin{center}
+\[
+\xymatrix@R10pt{
+  {\verb"AnyPtr"}
+    {
+	\save
+   [].[dd]*+[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{{\verb"Obj"}}
+   {
+	\save
+   [].[]*+[F-:<3pt>]\frm{}
+   \restore
+	}
+	\ar@[red][ld]
+  &{{\verb"class A"}}
+  %\ar@{-->}@/_10pt/[l]
+    {
+	\save
+   [].[dd]*+[F-:<3pt>]\frm{}
+   \restore
+	}
+  \\
+  {\verb"ptr"}
+   {
+	\save
+   [].[]*+[F-]\frm{}
+   \restore
+	}
+  %\ar[ru]
+  &{}&{{\verb"void f()"}}
+  \ar@[red][ldd]+(10,2)
+  \\
+  {\verb"vtable"}
+    {
+	\save
+   [].[]*[F-]\frm{}
+   \restore
+	}
+  \ar@(d,l)[rd]&{}&{{\verb"void g()"}}
+  \ar@[red][ldd]+(10,2)
+  \\
+  {}&{\verb"Fptr f\_ = nullptr"}
+    {
+	\save
+   [].[d]*[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{}\\
+  {}&{\verb"Fptr g\_ = nullptr"}&{}\\
+}
+\]
+\end{center}
+Технически, так как методы \texttt{f} и \texttt{g} зависят от класса \texttt{A} и для всех объектов класса \texttt{A} они будут одинаковые, то нет необходимости для каждого объекта хранить на куче свою таблицу.
+Вместо этого для класса \texttt{A} заведем одну статическую таблицу и будем хранить указатель на нее.
+
+\subsubsection{Имплементация}
+\label{section::RefErasureImpl}
+
+Давайте разбираться с деталями имплементации.
+В начале надо понять, как мы будем работать с таблицами указателей на функцию.
+Тут мы по сути повторяем то, как имплементирован механизм с виртуальными функциями.
+
+\paragraph{Виртуальные таблицы}
+
+В начале надо заменить методы на глобальные функции, чтобы у нас не было зависимости от типа \texttt{A}.
+Делается это так:
+\begin{center}
+\begin{tabular}{ll}
+{
+\begin{minipage}[\baselineskip]{5.4cm}
+\begin{cppcode}[numbers = none]
+struct A {
+  void f() const;
+  void g();  
+};
+\end{cppcode}
+\end{minipage}
+}&{
+\begin{minipage}[\baselineskip]{5.35cm}
+\begin{cppcode}[numbers = none]
+
+void f_(const A* self);
+void g_(A* self);  
+
+\end{cppcode}
+\end{minipage}
+}\\
+\end{tabular}
+\end{center}
+Теперь заведем структуру, в которой будут лежать указатели на данные функции:
+\begin{center}
+\begin{minipage}[\baselineskip]{11.2cm}
+\begin{cppcode}
+struct VTable {
+  using FSignature = void(const void*);
+  using GSignature = void(void*);
+
+  FSignature* f_ = nullptr;
+  GSignature* g_ = nullptr;
+};
+\end{cppcode}
+\end{minipage}
+\end{center}
+Обратите внимание, что настоящий тип функции \texttt{f\_} есть \texttt{void(const A*)}.
+Однако, в таблице будет лежать функция с сигнатурой \texttt{void(const void*)}.
+А значит, нам надо будет сделать несколько вспомогательных действий.
+Давайте заведем шаблонный класс, который будет хранить статическую таблицу.
+\begin{center}
+\begin{minipage}[\baselineskip]{11.2cm}
+\begin{cppcode}
+template<class T>
+struct Bind {
+static void f_(const void* self) {
+  static_cast<const T*>(self)->f();
+}
+static void g_(void* self) {
+  static_cast<T*>(self)->g();
+}
+
+static constexpr VTable vtable{f_, g_};
+};
+
+template<>
+struct Bind<void> {
+
+static constexpr VTable vtable{nullptr, nullptr};
+};
+\end{cppcode}
+\end{minipage}
+\end{center}
+Здесь для каждого типа \texttt{T} мы можем создать структуру \texttt{Bind<T>}.%
+\footnote{Название пожалуй не лучшее, но я не знаю как его еще назвать.}
+Внутри этой структуры мы биндим настоящие методы из класса \texttt{T} (который будет \texttt{A} в нашем примере выше).
+Этот бинд делается в строках 3-5 для метода \texttt{T::f()} и в строках 6-8 для метода \texttt{T::g()}.
+После чего мы создаем статическую переменную \texttt{vtable} внутри этой структуры, которая будет хранить виртуальную таблицу на забинденные методы.
+Таким образом \texttt{Bind<T>::vtable} -- это будет таблица с методами для указателя на объект типа \texttt{T}.
+Обратите внимание, что мы принимаем объект \texttt{self} в формате \texttt{void*} или \texttt{const void*}, потому что именно в таком формате он будет лежать внутри \texttt{AnyPtr}.
+Но так как таблица с методами и указатель на объект согласованы, мы знаем, что всегда можно кастовать \texttt{self} в тип \texttt{T*} или \texttt{const T*}.
+Таким образом мы получаем доступ к настоящим методам \texttt{f} и \texttt{g} из класса \texttt{T}.
+И если в классе \texttt{T} нет возможности вызвать эти методы как в строках 4 и 7, то произойдет ошибка компиляции.
+Это хорошо, потому что это означает, что мы пытаемся использовать класс \texttt{T} не поддерживающий нужные методы и компилятор нашел нашу ошибку.
+После общего определения идет специализация для таблицы для типа \texttt{void}, который используется как sentinel и означает, что эта таблица ни на что не забиндилась.
+
+\paragraph{Имплементация \texttt{AnyPtr}}
+
+Теперь когда мы определились с тем, как устроен вспомогательный класс для работы с таблицами функций, давайте опишем как будет выглядеть основной класс \texttt{AnyPtr}.
+В начале опишем его методы и данные, а потом уже напишем имплементацию всех методов:
+\begin{cppcode}
+class AnyPtr {
+public:
+  AnyPtr();
+  AnyPtr(std::nullptr_t);
+  template<NonVoidClass T>
+  AnyPtr(T* ptr);
+
+  AnyPtr(const AnyPtr& other);
+  AnyPtr& operator=(const AnyPtr& other);
+
+  AnyPtr(AnyPtr&& other) noexcept;
+  AnyPtr& operator=(AnyPtr&& other) noexcept;
+  ~AnyPtr();
+
+  operator bool() const;
+
+  void f() const;
+  void g();
+
+private:
+  void clear();
+
+  const VTable* vtable_ = &Bind<void>::vtable;
+  void* ptr_ = nullptr;
+};
+\end{cppcode}
+Как мы видим в классе лежат только два указателя:
+\begin{enumerate}
+\item \texttt{vtable\_} указывает на таблицу функций.
+По умолчанию ссылается на пустую таблицу функций определенную для типа \texttt{viod}.
+
+\item \texttt{ptr\_} указывает на объект, у которого мы будем вызывать нужные методы.
+По умолчанию ссылается на \texttt{nullptr}.
+\end{enumerate}
+В начале разберемся с вопросами обеспечения правильной семантики для \texttt{AnyPtr}.
+Это означает, что этот класс должен правильно создаваться, копироваться, перемещаться и уничтожаться.
+Для этого имплементируем все конструкторы, деструктор и операторы присваивания.
+Я в начале сгруппирую дефолтные конструкторы, а уже после них те, что требуют ручной имплементации.
+\begin{cppcode}
+  AnyPtr() = default;
+  AnyPtr(const AnyPtr& other) = default;
+  AnyPtr& operator=(const AnyPtr& other) = default;
+  ~AnyPtr() = default;
+
+  AnyPtr(AnyPtr&& other) noexcept
+      : vtable_(std::exchange(other.vtable_, &Bind<void>::vtable)),
+        ptr_(std::exchange(other.ptr_, nullptr)) {
+  }
+  
+  AnyPtr& operator=(AnyPtr&& other) noexcept {
+    AnyPtr tmp = std::move(other);
+    std::swap(vtable_, tmp.vtable_);
+    std::swap(ptr_, tmp.ptr_);
+    return *this;
+  }
+  
+  AnyPtr(std::nullptr_t) {
+  }
+  
+  template<NonVoidClass T>
+  AnyPtr(T* ptr) : vtable_(&Bind<T>::vtable), ptr_(ptr) {
+  }
+\end{cppcode}
+Дефолтный конструктор настраивается путем инициализации полей класса.
+Так как все поля класса -- это встроенные типы, то деструктор, конструктор копирования и копирующее присваивание тоже могут быть дефолтными.
+Интерес представляют конструкторы от указателей и мувающие конструкторы.
+Так как поля класса встроеенные типы, то мувающие операции по дефолту совпадают с копирующими, а я все же хотел бы, чтобы после мува, мы вынули из старой переменной указатель и перенесли его в новую.
+\begin{cppcode}
+A a;
+AnyPtr ptr1 = &a;
+AnyPtr ptr2 = std::move(ptr1);
+AnyPtr ptr3;
+ptr3 = std::move(ptr2);
+\end{cppcode}
+Я хочу, чтобы в строке 3 указатель \texttt{ptr1} инвалидировался.
+Аналогично в строке 5 хочу, чтобы указатель \texttt{ptr2} инвалидировался.
+А для этого нужно сделать очистку данных в старом объекте в мувающем конструкторе и операторе присваивания.
+Тут используются стандартные имплементации, которые обсуждались в разделе~\ref{section::siximpl}.
+
+Конструктор от \texttt{std::nullptr\_t} нужен, чтобы можно было написать
+\begin{cppcode}
+A a;
+AnyPtr ptr = &a;
+ptr = nullptr;
+\end{cppcode}
+И таким образом мы  занулили (инвалидировали) указатель.
+Конструктор от указателя нужен, чтобы сработала строчка 2 в листинге выше.
+Но я не хочу создавать \texttt{AnyPtr} от указателя на \texttt{void*}, а потому мне нужно отключить этот конструктор.
+Это делается с помощью \texttt{concept}-а, который я назвал \texttt{NonVoidClass}.
+По сути этот концепт лишь проверяет ялвяется ли \texttt{T} типом \texttt{void} или нет.
+И если является, то этот конструктор не компилируется, а если не является, то можно создавать такой конструктор.
+Если же класс \texttt{T} не предоставляет нужные методы \texttt{f} и \texttt{g}, то в этом конструкторе в момент обращения к таблице \texttt{\&Bind<T>::vtable} произойдет ошибка компиляции.
+Можно поиграться и сделать более адекватные сообщения об ошибках, но я стараюсь делать минимальные примеры.
+
+Теперь напишем имплементацию оставшихся методов:
+\begin{cppcode}
+  operator bool() const {
+    return ptr_ != nullptr && vtable_->f_ != nullptr && vtable_->g_ != nullptr;
+  }
+
+  void f() const {
+    assert(*this);
+    vtable_->f_(ptr_);
+  }
+  void g() {
+    assert(*this);
+    vtable_->g_(ptr_);
+  }
+
+  void clear() {
+    vtable_ = &Bind<void>::vtable;
+    ptr_ = nullptr;
+  }
+\end{cppcode}
+Оператор \texttt{operator bool() const} нужен, чтобы проверять ссылается ли указатель на кого-то или нет.%
+\footnote{Для имплементации достаточно было бы проверить, то \texttt{ptr\_ != nullptr}, но я хотел подчеркнуть, что мне важно, чтобы все указатели были не нулевыми.
+В реальном коде, можно оставить лишь одну проверку для \texttt{ptr\_} и сделать инвариантом, что для ненулевого \texttt{ptr\_} указатели на обе функции тоже не нулевые.}
+Метод \texttt{clear} просто удобный способ очистки указателя.
+И методы \texttt{f} и \texttt{g} являются самым важным элементом публичного интерфейса -- это те методы, которые позволяют вызвать нужные методы \texttt{f} и \texttt{g} на объекте по адресу \texttt{ptr\_}.
+Как видите, это происходит через вызов метода по указателю из текущей таблицы.
+Теперь можно писать такой код
+\begin{cppcode}
+A a;
+AnyPtr ptr = &a;
+ptr.f();
+ptr.g();
+B b;
+ptr = &b;
+ptr.f();
+ptr.g();
+\end{cppcode}
+
+\paragraph{Оператор \texttt{operator->}}
+Все бы хорошо, но только мы бы хотели у указателя иметь возможность звать методы по оператору \texttt{operator->()}.
+Это можно сделать с помощью простого адаптера поверх \texttt{AnyPtr}.
+Вот простое неинтрузивное решение, то есть без изменения \texttt{AnyPtr}.
+Мы сделаем старый \texttt{AnyPtr} интерфейсом, который надо вернуть по оператору \texttt{operator->} из нового \texttt{AnyPtr2}:
+\begin{cppcode}
+class AnyPtr2 : AnyPtr {
+public:
+  using AnyPtr::operator bool;
+
+  AnyPtr* operator->() {
+    return this;
+  }
+  const AnyPtr* operator->() const {
+    return this;
+  }
+};
+\end{cppcode}
+Теперь можно писать код следующим образом:
+\begin{cppcode}
+struct A {
+  void f() const;
+  void g();
+};
+
+struct B {
+  void f() const;
+  void g();
+};
+
+int main() {
+  A a;
+  B b;
+  AnyPtr2 p = &a;
+  p->f();
+  p = &b;
+  p->g();
+  return 0;
+}
+\end{cppcode}
+Есть популярное решение использующее UB.
+Давайте я его продемонстрирую.
+\begin{cppcode}
+class AnyPtr {
+public:
+  Interface* operator->() {
+    return static_cast<Interface*>(this);  // UB
+  }
+  const Interface* operator->() const {
+    return static_cast<const Interface*>(this); // UB
+  }
+protected:
+  void f() const;
+  void g();
+};
+
+class Interface : AnyPtr {
+public:
+  using AnyPtr::f;
+  using AnyPtr::g;
+};
+\end{cppcode}
+В этом решении мы не делаем адаптер вокруг \texttt{AnyPtr}, а добавляем наследника и в операторе \texttt{operator->} кастуем \texttt{this} к производному классу.
+Технически это скорее всего будет работать на всех компиляторах, но фактически это UB.
+Причина следующая, вы в начале кастуете тип \texttt{AnyPtr} к производному классу \texttt{Interface}.
+Это еще пока не UB.
+Но если вы после этого обратитесь к любому методу из производного класса, то это будет UB, потому что нельзя обращаться по адресу к объекту, которого там нет.
+По адресу \texttt{this} лежит объект типа \texttt{AnyPtr}, а вызов метода через класс \texttt{Interface}, принимает аргумент \texttt{this} типа \texttt{Interface}.
+Вот это уже делать нельзя.
+
+\subsubsection{Общее шаблонное решение}
+
+В предыдущих разделах мы построили класс \texttt{AnyPtr}, в который можно складывать указатель на любой объект, у которого можно вызывать два метода \texttt{f} и \texttt{g} без аргументов и без возвращаемого значения.
+Однако, мы бы хотели теперь настроить наш тип \texttt{AnyPtr} так, чтобы можно было в него передавать любой интерфейс.
+Основная проблема в автоматизации этого процесса заключается в том, что нам надо научиться передавать имена методов.
+Но к сожалению в C++ нет способа передавать имя метода в виде параметра.
+Это возможно с помощью макросов (как кодогенерация), но не возможно методами языка.
+В идеале мы бы хотели следующее решение
+\begin{cppcode}
+class Interface {
+public:
+  virtual void f() const = 0;
+  virtual void g() = 0;
+};
+
+int main() {
+  A a;
+  AnyPtr<Interface> ptr = &a;
+  ptr->f();
+  ptr->g();
+}
+\end{cppcode}
+% TO DO

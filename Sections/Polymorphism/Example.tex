@@ -1,0 +1,173 @@
+\ProvidesFile{Example.tex}[Пример]
+
+
+\subsection{Важный пример}
+
+Я решил, что прежде чем рассказывать про все методы по одиночке, я хочу рассмотреть конкретный пример, на котором буду обсуждать дальнейшее.
+Предположим, что у вас есть некоторая функция \texttt{f}, которая внутри себя последовательно вызывает три функции \texttt{f1}, \texttt{f2} и \texttt{f3}.
+И предположим, что вы хотите вместо функции \texttt{f2} использовать другие функции.
+Вот как бы это решение выглядело на Python:
+\begin{center}
+\begin{tabular}{ll}
+{
+\begin{minipage}[\baselineskip]{4cm}
+\begin{pythoncode}[numbers = none, linewidth=5cm]
+## script.py
+
+def f1():
+  pass
+def f2():
+  pass
+def f3():
+  pass
+def g():
+  pass
+\end{pythoncode}
+\end{minipage}
+}&{
+\begin{minipage}[\baselineskip]{6cm}
+\begin{pythoncode}[numbers = none, linewidth=5.5cm]
+def function():
+  f1()
+  function.f()
+  f3()
+function.f = f2
+
+def main():
+  function()
+  funciton.f = g
+  function()
+\end{pythoncode}
+\end{minipage}
+}
+\end{tabular}
+\end{center}
+Вот как бы это решение выглядело на Си:
+\begin{center}
+\begin{tabular}{ll}
+{
+\begin{minipage}[\baselineskip]{5.5cm}
+\begin{cppcode}[numbers = none, linewidth=5.5cm]
+void f1();
+void f3();
+
+using Signature = void();
+using FPtr = Signature*;
+FPtr f = &f2;
+
+void function() {
+    f1();
+    f();
+    f3();
+}
+\end{cppcode}
+\end{minipage}
+}&{
+\begin{minipage}[\baselineskip]{5cm}
+\begin{cppcode}[numbers = none, linewidth=5cm]
+#include "Function.h"
+
+void g() {
+}
+
+
+int main() {
+  function();
+  f = &g;
+  function();
+  return 0;
+}
+\end{cppcode}
+\end{minipage}
+}
+\end{tabular}
+\end{center}
+Предыдущее решение вполне подходит и для C++, но если метод \texttt{f} может использовать внутреннее состояние, то есть более удачное решение на C++:
+\begin{center}
+\begin{tabular}{ll}
+{
+\begin{minipage}[\baselineskip]{5.5cm}
+\begin{cppcode}[numbers = none, linewidth=5.5cm]
+struct Function {
+  static void f1();
+  static void f2();
+  static void f3();
+  void operator()() const {
+    f1();
+    f();
+    f3();
+  }
+  std::function<void()> f = f2;
+};
+\end{cppcode}
+\end{minipage}
+}&{
+\begin{minipage}[\baselineskip]{5cm}
+\begin{cppcode}[numbers = none, linewidth=5cm]
+#include "Function.h"
+
+void g() {}
+
+int main() {
+  Function function;
+  function();
+  function.f = g;
+  function();
+  return 0;
+}
+\end{cppcode}
+\end{minipage}
+}
+\end{tabular}
+\end{center}
+Ну и конечно же классическое решение на C++, которое вы найдете в любой книжке про полиморфизм:
+\begin{center}
+\begin{tabular}{ll}
+{
+\begin{minipage}[\baselineskip]{5cm}
+\begin{cppcode}[numbers = none, linewidth=5cm]
+// Function.h
+
+struct Function {
+  static void f1();
+  static void f2();
+  static void f3();
+  void operator()() const {
+    f1();
+    f();
+    f3();
+  }
+  virtual void f() const {
+    f2();
+  }
+  virtual ~Function();
+};
+\end{cppcode}
+\end{minipage}
+}&{
+\begin{minipage}[\baselineskip]{5.5cm}
+\begin{cppcode}[numbers = none, linewidth=5.5cm]
+struct FunctionG : Function {
+  static void g();
+  void f() const {
+    g();
+  }
+};
+
+int main() {
+  Function* f = new Function();
+  (*f)();
+  delete f;
+  f = new FunctionG();
+  (*f)();
+  delete f;
+  return 0;
+}
+\end{cppcode}
+\end{minipage}
+}
+\end{tabular}
+\end{center}
+Уже сейчас вы можете оценить как минимум сложность по количеству написания кода для решения задачи каждым из методом.
+Дальнейшее изложение я хочу начать с обсуждения классического решения, как им предполагается пользоваться, как оно работает и почему оно является плохим во всех возможных смыслах.
+После я перейду к обсуждению стирающих указателей и типов с объяснением того, как должна выглядеть имплементация.

@@ -1,0 +1,628 @@
+\ProvidesFile{Observer.tex}[Observer Pattern]
+
+
+\subsection{Observer Pattern}
+\label{section::Observer}
+
+Паттерн описываемый в этой главе по сути призван решить все проблемы прямого взаимодействия и сделать его безопасным.
+
+\subsubsection{Общая идея}
+
+Мы хотим обеспечить безопасное одностороннее взаимодействие между объектами классов \verb"B" и \verb"C".
+Логически это выглядит так:
+\[
+\xymatrix@R=15pt@C=15pt{
+	{B}
+	{
+	\save
+   [].[rd]*[F-:<3pt>]\frm{}
+   \restore
+	}
+	&{}&{}&{C}
+	&{\phantom{C}}\\
+	{}&{port}\ar@{=>}[rr]%\ar@/^/[rr]
+	&{}&{port}
+	{
+	\save
+   [].[ru]*[F-:<3pt>]\frm{}
+   \restore
+	}	
+	%\ar@/^/[ll]+(4.4,-1)
+	&{}\\
+}
+\]
+Идея в том, чтобы завести два вида порта:
+\begin{enumerate}
+\item Выходной порт: observable.
+
+\item Входной порт: observer.
+\end{enumerate}
+Теперь объект класса \verb"B" будет содержать выходной порт -- observable.
+А объект класса \verb"C" будет содержать в себе входной порт -- observer.
+Отличие этого подхода будет в том, что у этих портов есть некоторый протокол взаимодействия, который гарантирует, что они всегда находятся в корректном состоянии.
+Но для этого оба порта должны иметь возможность двустороннего общения.
+Кроме того в этом случае оба порта разделяют общий инвариант, который отражает корректное синхронизированное состояние связи между портами.
+Так же отметим, что к одной observable можно присоединить множество observer-ов.
+Но каждый observer прослушивает максимум одну observable.
+
+У каждого порта так же есть тип данных, которые он умеет отправлять.
+Соединить можно только порты с одинаковым типом данных.
+Логически observable при поступлении новых данных оповещает всех observer-ов, который на данный момент подписаны на него.
+Теперь опишем, какой функционал предоставляют нам оба порта.
+
+\paragraph{Observable}
+\begin{enumerate}
+\item Конструктор.
+В конструкторе мы должны указать источник данных для порта.
+Это то место, где биндятся данные на порт.
+
+\item Метод \verb"subscribe", который позволяет подписать observer порт.
+При этом очень важная деталь: сразу после подписания, observable отправляет данные observer-у.
+То есть observer всегда имеет самые последние данные, которые только есть в observable.
+Не бывает такого, что ему надо каким-то образом синхронизироваться или он не получил данные.
+Это push система, где данные толкаются при их появлении получателю.
+
+Так же стоит отметить, что у данного метода может быть много разных поведений.
+Например, что делать, если мы пытаемся подписать observer-а, который уже на кого-то подписан?
+Как правильно поступить?
+Игнорировать его или отписать и переподписать на себя?
+Это все вариации поведения, которые можно настраивать и получать разные виды взаимодействия.
+
+\item Метод \verb"notify", который оповещает всех observer-ов.
+Все оповещения происходят через этот метод.
+Технически есть еще метод, который умеет оповестить только одного фиксированного observer-а, но это уже детали.
+
+\item Observable сама менеджерит всех своих подписчиков и знает их полный список.
+Бывают вариации, когда observable поддерживает только одного подписчика или ограниченное количество подписчиков.
+\end{enumerate}
+
+\paragraph{Observer}
+
+\begin{enumerate}
+\item Конструктор.
+Главная задача принимающего порта -- по приходу данных вызвать нужное действие над ними.
+бывают действия двух типов
+\begin{enumerate}
+\item \verb"onSubscribe".
+Это действие, которое нужно сделать с данными, когда observer только что подписался на observable и получил от него данные.
+
+\item \verb"onNotify".
+Это действие, которое нужно сделать с данными, когда observer уже был в подписанном состоянии и прилетели новые данные из observable.
+\end{enumerate}
+Оба этих действия биндятся в конструкторе.
+
+\item Метод \verb"unsubscribe", который позволяет отписаться от \verb"observable".
+
+\item Метод \verb"isSuscribed" проверки подписан ли в данный момент observable на кого-то или нет.
+\end{enumerate}
+
+Кроме этого оба порта должны действовать по некоторому протоколу, который позволяет поддерживать порты в корректном состоянии.
+Например, если порт observable умирает, то перед смертью он отписывает всех подписавшиеся на него порты.
+Аналогично, если observer умирает, то он отписывается от своего observable, если таковая имеется.
+
+\subsubsection{Что мы хотим в коде}
+
+Прежде чем заниматься имплементацией, давайте в начале продемонстрируем на примерах, чего мы ожидаем от паттерна.
+
+\paragraph{Простой пример}
+
+В этом примере мы хотим показать, как синтаксически будет выглядеть работа с observable и observer в коде.
+\begin{cppcode}
+#include <iostream>
+#include "Observer.h"
+
+void print(int x) {
+  std::cout << x << std::endl;
+}
+
+int main() {
+  int x = 42;
+  Observable<int> out([&x] () { return x; }); // data binding
+  Observer<int> in(print, print); // actions binding
+  
+  out.subscribe(&in); // print 42
+  
+  x = 24;
+  out.notify();  // print 24
+  x = 42;
+  in.unsubscribe();
+  out.notify(); // does nothing
+ 
+  return 0;
+}
+\end{cppcode}
+
+\paragraph{Пример взаимодействия объектов}
+
+Теперь давайте обсудим ситуацию соответствующую диаграмме:
+\[
+\xymatrix@R=15pt@C=15pt{
+	{A}
+	{
+	\save
+   [].[rd]*[F-:<3pt>]\frm{}
+   \restore
+	}
+	&{}&{}&{B}
+	&{\phantom{C}}\\
+	{}&{port}\ar@{=>}[rr]%\ar@/^/[rr]
+	&{}&{port}
+	{
+	\save
+   [].[ru]*[F-:<3pt>]\frm{}
+   \restore
+	}	
+	%\ar@/^/[ll]+(4.4,-1)
+	&{}\\
+}
+\]
+Код для \verb"A" выглядит так
+\begin{cppcode}
+class A {
+public:
+  void subscribe(Observer<int>* obs) {
+    out_.subscribe(obs);
+  }
+  
+  void set(int x) {
+    x_ = x;
+    out_.notify();
+  }
+  
+private:
+  int x_ = 0;
+  Observable<int> out_ = [&x_] () { return x_; }
+};
+\end{cppcode}
+Здесь у нас есть внутренняя переменная \verb"x_", которая представляет из себя данные.
+Кроме этого мы заводим порт \verb"out_" для оповещения.
+Теперь в методе \verb"set" мы кроме установления нового значения добавляем строчку для оповещения.
+И метод \verb"subscribe" нужен для того, чтобы можно было пробросить observer порт и подписать его на наш observable порт.
+Обратите внимание, что порт \verb"out_" перехватывает переменную \verb"x_" по ссылке.
+Это значит, что объект класса \verb"A" ни в коем случае нельзя перемещать в памяти, иначе биндинг данных сломается.
+Вот в этом месте бы очень пригодилась возможность по \verb"out_" найти соседнее данное \verb"x_", а не хранить его адрес.
+
+Код для \verb"B" выглядит так
+\begin{cppcode}
+class B {
+public:
+  Observer<int>* port() {
+    return &in_;
+  }
+private:
+  void print(int x) const {
+    std::cout << x << std::endl;
+  }
+  Observer<int> in_ = Observer<int>([this] (int x) { print(x); },
+                                    [this] (int x) { print(x); });
+};
+\end{cppcode}
+Обратите внимание, что класс \verb"B" имеет приватный метод \verb"print", который умеет реагировать на полученные данные.
+И наша задача вызвать этот метод при получении данных на входной порт \verb"in_".
+Для этого в конструкторе данные биндятся на этот метод.
+В данном случае мы перехватываем \verb"this" и вызываем метод \verb"print" у текущего объекта \verb"this".
+Раз мы запоминаем адрес хозяина, то нельзя перемещать объект класса \verb"B" в памяти.
+Метод \verb"port" нужен для проброски адреса порта, чтобы его можно было подписать на другие порты.
+
+Теперь мы можем использовать эти классы следующим образом
+\begin{cppcode}
+int main() {
+  A a;
+  B b;
+  
+  a.subscribe(b.port());  // print 0
+  
+  a.set(42);              // print 42
+  a.set(24);              // print 24
+    
+  return 0;
+}
+\end{cppcode}
+
+\subsubsection{Имплементация}
+
+Обратите внимание, что ниже приведен минимальный пример, который не содержит никаких проверок.
+Это все сделано для читаемости.
+Кроме того, в блокирующем observer pattern можно передавать данные либо по ссылке, либо по копии.
+И тяжелые данные лучше передавать по ссылке, а легкие по копии.
+Это все можно настроить и добавить в паттерн, но я намерено игнорирую эту деталь.
+Например, сигнатура для биндинга данных может быть 
+\begin{cppcode}
+std::function<const T&()> data_;
+\end{cppcode}
+
+\paragraph{Observable}
+
+Начнем с объявления observable.
+\begin{cppcode}
+template<class T>
+class Observable {
+  using Observer = Observer<T>;
+  friend Observer;
+public:
+  template<class Tt>
+  Observable(Tt&& data);
+  
+  Observable(const Observable&) = delete;
+  Observalbe& operator=(const Observable&) = delete;
+  Observable(Observable&&) noexcept = delete;
+  Observable& operator=(Observable&&) noexcept = delete;
+  
+  ~Observable();
+  
+  void subscribe(Observer* obs);
+  void notify() const;
+private:
+  void detach_(Observer* obs);
+  
+  std::function<T()> data_;
+  std::list<Observer*> Observers_;
+};
+\end{cppcode}
+В коде выше я использую \verb"std::list", это один из самых худших вариантов контейнера, который только существует.
+Потому в реальности лучше использовать что-то другое, но пусть будет так.
+Первое на что надо обратить внимание -- все операции копирования и перемещения удалены.
+Это значит, что observable будет иметь постоянный адрес в течение всего времени жизни.
+В целом это хорошое свойство, потому что как мы видели в примерах выше, когда порт складывается внутри класса, то ему приходится биндиться на данные этого класса по адресу.
+А для корректности такого бинда весь класс тоже должен быть не перемещаемым.
+Потому помещение observable в любой класс делает его адресуемым в том смысле, что его адрес в течение всей жизни не меняется.
+
+В качестве данных внутри observable лежат всего две переменные.
+\begin{enumerate}
+\item Переменная \verb"data_" -- это функциональный объект, который умеет возвращать нужные данные.
+В целом общая практика такова, что лучше передавать в высокоуровневые объекты не данные, а методы или функторы.
+Потому мы не храним адрес данных внутри, а храним метод получения данных.
+Таким образом данные могут лежать где угодно и мы код observable об этом ничего не знает.
+
+\item Переменная \verb"Observables_" -- список указателей на всех observer-ов, которые подписаны на данную observable.
+Так как мы храним указатели на observer-ов, то они должны быть не перемещаемыми в памяти.
+\end{enumerate}
+Еще важная деталь -- класс \verb"Observer" объявлен \verb"friend" для \verb"Observable".
+Это сделано потому что эти два класса имеют общий инвариант.
+Они хранят указатели друг на друга и должны уметь поддерживать эти указатели в корректном состоянии.
+Например при смерти observer должен гарантировать свое удаление из списка подписчиков.
+Иначе observable будет хранить не корректный адрес.
+Для поддержки этого инварианта, эти классы должны дергать друг у друга не безопасные методы, которые никому другому доступны быть не должны.
+В данном случае это метод \verb"detach_".
+Он специально помечен \verb"_" в конце, чтобы подчеркнуть, что он не безопасный.
+Что он делает будет видно ниже.
+
+Теперь перейдем к имплементации методов.
+Начнем с шаблонного конструктора
+\begin{cppcode}
+template<class Tt>
+Observable(Tt&& data) : data_(std::forward<Tt>(data))
+\end{cppcode}
+Здесь имеется в виду, что \verb"data" -- это функтор, который является источником данных.
+Теперь имплементация остальных методов
+\begin{cppcode}
+template<class T>
+class Observable {
+  using Observer = Observer<T>;
+  friend Observer;
+public:
+	/* Constructors */
+  ~Observable() {
+    while(!Observers_.empty()) {
+      Observers_.
+        front()->unsubscribe();
+    }
+  }
+  void notify() const {
+    for (auto obs : observers_)
+      obs->onNotify_(data_());
+  }
+  void subscribe(Observer* obs) {
+    if (obs->isSubscribed())
+      obs->unsubscribe();
+    Observers_.push_back(obs);
+    obs->setObservable_(this);
+    obs->onSubscribe_(data_());
+  }
+private:
+  void detach_(Observer* obs) {
+    Observers_.remove(obs);
+  }
+  
+  function<T()> data_;
+  list<Observer*> Observers_;
+};
+\end{cppcode}
+Давайте пройдемся по методм.
+\begin{enumerate}
+\item Деструктор просто вызывает метод \verb"unsubscribe" у всех observable из списка, пока он не пуст.
+Обратите внимание, что метод \verb"unsubscribe" является публичным методом интерфейса observer-а.
+А потому после его вызова и observer и observable находятся в корректном состоянии и никакой дополнительной работы делать не надо.
+Более того, список observer-ов уменьшится на отписанный порт.
+
+\item Метод \verb"notify" делает в точности то, что должен -- он вызывает у всех подписанных observer-ов метод \verb"onNotify_" и сообщает ему данные, которые были забиндины через \verb"data_".
+
+\item Метод \verb"subscribe" действует чуть интереснее.
+Мы уже обсуждали, что тут возможно несколько поведений.
+И по-хорошему настраиваемое поведение должно храниться тоже в переменной функторе внутри observable.
+Но я для определенности выбрал следующее поведение.
+В начале мы проверяем подписан ли observer на кого-то сейчас, и если подписан, то тут же его отписываем.
+Теперь observer свободен.
+Мы его добавляем в конец очереди в список и так мы указываем на данного observer-а.
+Но у observer-а текущий указатель не указывает ни на кого.
+Для восстановления инварианта, мы зовем не безопасный метод \verb"setObservable_" и складываем туда адрес observable.
+После чего, мы оповещаем новый порт через \verb"onSubscribe_" действие, которому скармливаем забиндинные данные.
+
+\item Небезопасный метод \verb"detach_" просто удаляет текущего observer-а из списка подписавшихся.
+Этот метод может сломать инвариант.
+\end{enumerate}
+
+\paragraph{Observer}
+
+Теперь опишем как выглядит объявление класса для observer-а.
+\begin{cppcode}
+template<class T>
+class Observer {
+  using Observable = Observable<T>;
+  friend Observable;
+public:
+  template<class Tt1, class Tt2>
+  Observer(Tt1&& onSubscribe, Tt2&& onNotify);
+  Observer(const Observer&) = delete;
+  Observer& operator=(const Observer&) = delete;
+  Observer(Observer&&) noexcept = delete;
+  Observer& operator=(Observer&&) noexcept = delete;
+  ~Observer();
+  
+  void unsubscribe();
+  bool isSubscribed() const;
+private:
+  void setObservable_(Observable* observable);
+  
+  Observable* Observable_ = nullptr;
+  std::function<void(T)> onSubscribe_;
+  std::function<void(T)> onNotify_;
+};
+\end{cppcode}
+Как и в случае observable все перемещающие и копирующие операции удалены.
+Объект становится не перемещаемым в памяти и значит все время его жизни имеет постоянный адрес.
+Так же \verb"Observable" объявлен \verb"friend" для \verb"Observer".
+Это так же связано с тем, что \verb"Observer" должен дергать не безопасные методы для восстановления инварианта.
+Поля класса ясны из названия
+\begin{enumerate}
+\item \verb"Observable_" -- это адрес observable, на которую в данный момент подписан \verb"Observer".
+Состояние \verb"nullptr" соответствует отсутствию связи.
+
+\item \verb"onSubscribe_" -- действие, которое выполняется при подписании.
+Биндится в конструкторе.
+
+\item \verb"onNotify_" -- действие, которое выполняется при оповещении.
+Биндится в конструкторе.
+\end{enumerate}
+Имплементацию начнем с конструктора
+\begin{cppcode}
+template<class Tt1, class Tt2>
+Observer(Tt1&& onSubscribe, Tt2&& onNotify)
+  : onSubscribe_(std::forward<Tt1>(onSubscribe)),
+    onNotify_(std::forward<Tt2>(onNotify))) {}
+\end{cppcode}
+В данном случае мы просто передаем два функтора, которые будут выполнять нужные действия на указанные сигналы.
+Теперь остальные методы
+\begin{cppcode}
+template<class T>
+class Observer {
+  using Observable =
+          Observable<T>;
+  friend Observable;
+public:
+  /* Constructors */
+  ~Observer() {
+    unsubscribe();
+  }
+  void unsubscribe() {
+    if (!isSubscribed())
+      return;
+    Observable_->detach_(this);
+    Observable_ = nullptr;
+  }
+  bool isSubscribed() const {
+    return Observable_;
+  }
+  
+private:
+  void setObservable_(Observable* observable) {
+    Observable_ = observable;
+  }
+  
+  Observable* Observable_ = nullptr;
+  function<void(T)> onSubscribe_;
+  function<void(T)> onNotify_;
+};
+\end{cppcode}
+Давайте пройдемся по ним по всем.
+\begin{enumerate}
+\item В деструкторе, прежде чем умереть мы отписываемся от текущей observable.
+Метод \verb"unsubscribe" является безопасным.
+Его можно звать внезависимости подписан порт в данный момент или нет.
+После вызова мы отсоединены от observable и потому можно спокойно умирать.
+
+\item Метод \verb"unsubscribe" в начале проверяет подписаны ли мы на кого-то или нет.
+Если нет, то просто ничего не делаем.
+Если же подписаны, то мы вначале зовем небезопасный метод \verb"detach_", который отцепляет observer от observable.
+Но теперь для восстановления инварианта, нужно занулить \verb"Observable_", что и делается в следующей строчке.
+
+\item Метод \verb"isSubscribe" просто проверяет адрес текущей observable.
+
+\item Метод \verb"setObservable_" устанавливает новое значение для переменной \verb"Observable_".
+Этот метод не безопасный и может сломать инвариант между портами.
+Потому он помечен \verb"_" в конце имени.
+\end{enumerate}
+
+\subsubsection{Модификация observer pattern}
+
+Давайте предположим, что у меня есть очень тяжелые данные, которые могут модифицироваться частями.
+\begin{cppcode}
+BigData data;
+\end{cppcode}
+Например это может быть \verb"std::vector", в который мы только добавляем данные.
+Давайте рассмотрим такой пример использования
+\begin{cppcode}
+BigData data;
+
+Observable<BigData> port0 = [&data]() { return data; };
+Observer<BigData> port1([](const BigData& data){ /*do something*/},
+                        [](const BigData& data){ /*do something*/});
+
+port0.subscribe(&port1); // notify with full data
+data.update();
+port0.notify(); // notify with full data
+\end{cppcode}
+Как мы видим, в этом случае при подписке \verb"port1" получил огромную часть данных.
+После чего в строке~8 данные изменились.
+И в строке~9 в \verb"port1" опять прилетели все данные целиком.
+И вот тут вопрос как правильно реагировать на стороне приемного порта.
+Если просто обновить данные и полностью -- это дорогая операция.
+Если же не обновлять данные полностью, то на стороне observer-а должен быть вычислен \verb"diff" между текущим состоянием и пришедшим в порт и после этого обновлена нужная часть.
+К сожалению такое вычисления \verb"diff" может оказаться не менее затратной, чем полностью обновить данные.
+В этом случае лучше при подписании и при оповещении передавать разные данные.
+Но для этого нужна модифицированная версия \verb"Observable" и \verb"Observer".
+
+В начале заведем два вида данных
+\begin{cppcode}
+BigData data;
+Updata patch;
+\end{cppcode}
+где \verb"patch" представляет из себя \verb"diff" с предыдущим состоянием.
+На стороне структуры данных мы можем легко поддерживать операцию получения \verb"diff" при любых изменениях структуры.
+\begin{cppcode}
+Observable<BigData, Update> port0([&data]() { return data; },
+                                  [&patch]() { return patch; });
+Observer<BigData, Update> port1([](const BigData& data){ /*do*/},
+                                [](const Update& patch){ /*do*/});
+
+port0.subscribe(&port1); // notify with full data
+patch = data.update();
+port0.notify(); // notify with the patch only
+\end{cppcode}
+Теперь для создания observable нужно биндиться не на одно данное, а на два разных данных.
+Одно для подписки, а другое для оповещения.
+Это делается в первых двух строчках.
+Дальше идет бинд действий для обзервера.
+Первое действие биндится на подписку, второе на оповещение.
+Обратите внимание, что теперь у этих действий разный тип данных.
+Ниже идет пример, в котором при оповещении приходит только \verb"diff".
+По-хорошему в этом случае структура должна предоставлять возможность удобно работать с \verb"diff".
+Теперь опишем, как выглядят модифицированные версии наших портов.
+
+\paragraph{Observable}
+
+Обновленный класс выглядит следующим образом.
+\begin{cppcode}
+template<class Full, class Update>
+class Observable {
+  using Observer = Observer<Full, Update>;
+  friend Observer;
+public:
+  template<class TFull, class TUpdate>
+  Observable(TFull&& full, TUpdate&& update)
+   : full_(std::forward<TFull>(full)),
+     update_(std::forward<TUpdate>(update)) {}
+
+  Observable(const Observable&) = delete;
+  Observalbe& operator=(const Observable&) = delete;
+  Observable(Observable&&) noexcept = delete;
+  Observable& operator=(Observable&&) noexcept = delete;
+  ~Observable();
+  void subscribe(Observer* obs);
+  void notify() const;
+private:
+  void detach_(Observer* obs);
+  std::function<Full()> full_;
+  std::function<Update()> update_;
+  std::list<Observer*> Observers_;
+};
+\end{cppcode}
+Как видите мы заменили переменную \verb"data_" на две новые \verb"full_" и \verb"update_" для биндинга на данные.
+И нужно лишь поправить шаблонные аргументы для типов данных этих биндингов.
+И обновить конструктор.
+Методы же модифицируются очевидным образом.
+Мы подставляем вызов \verb"full_" внутри \verb"onSubscribe_" и вызов \verb"update_" внутри \verb"onNotify_".
+\begin{center}
+\begin{tabular}{ll}
+{
+%\rule{-1.8em}{0em}
+\begin{minipage}[\baselineskip]{8cm}
+\begin{cppcode}[numbers = none]
+template<class Full, class Update>
+class Observable {
+  using Observer =
+    Observer<Full, Update>;
+  friend Observer;
+public:
+	/* Constructors */
+  ~Observable() {
+    while(!Observers_.empty()) {
+      Observers_.
+        front()->unsubscribe();
+    }
+  }
+  void notify() const {
+    for (auto obs : observers_)
+      obs->onNotify_(update_());
+  }
+\end{cppcode}
+\end{minipage}
+}&{
+%\rule{-1em}{0em}
+\begin{minipage}[\baselineskip]{8cm}
+\begin{cppcode}[numbers = none]
+  void subscribe(Observer* obs) {
+    if (obs->isSubscribed())
+      obs->unsubscribe();
+    Observers_.push_back(obs);
+    obs->setObservable_(this);
+    obs->onSubscribe_(full_());
+  }
+
+private:
+  void detach_(Observer* obs) {
+    Observers_.remove(obs);
+  }
+
+  function<Full()> full_;
+  function<Update()> update_;
+  list<Observer*> Observers_;
+};
+\end{cppcode}
+\end{minipage}
+}
+\end{tabular}
+\end{center}
+
+\paragraph{Observer}
+
+Обновленный класс выглядит следующим образом.
+\begin{cppcode}
+template<class Full, class Update>
+class Observer {
+  using Observable = Observable<Full, Update>;
+  friend Observable;
+public:
+  template<class TFull, class TUpdate>
+  Observer(TFull&& onSubscribe, TUpdate&& onNotify)
+    : onSubscribe_(std::forward<TFull>(onSubscribe)),
+      onNotify_(std::forward<TUpdate>(onNotify)) {}
+  Observer(const Observer&) = delete;
+  Observer& operator=(const Observer&) = delete;
+  Observer(Observer&&) noexcept = delete;
+  Observer& operator=(Observer&&) noexcept = delete;
+  ~Observer();
+  void unsubscribe();
+  bool isSubscribed() const;
+private:
+  void setObservable_(Observable* observable);
+  Observable* Observable_ = nullptr;
+  std::function<void(Full)> onSubscribe_;
+  std::function<void(Update)> onNotify_;
+};
+\end{cppcode}
+Здесь ровно такие же изменения как и в \verb"Observable".
+Мы заменяем сигнатуры действий \verb"onSubscribe_" и \verb"onNotify_" в соответствии с новыми типами.
+Добавляем эти типы в виде двух шаблонных параметров.
+И обновляем конструктор для биндинга двух разных действий.
+Другие методы \verb"Observer"-а не требуют никаких изменений.
