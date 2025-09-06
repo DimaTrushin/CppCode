@@ -4,7 +4,7 @@
 \section{Обработка ошибок}
 % TO DO
 
-\subsection{Виды ошибок и доступные средства языка}
+\subsection{Виды ошибок и доступные средства}
 
 \paragraph{Виды ошибок}
 
@@ -19,7 +19,7 @@
 В любом случае это ошибки, которые могут встретиться в  программе и которые не связаны с некорректностью кода.
 \end{enumerate}
 
-\paragraph{Механизмы языка}
+\paragraph{Обработка ошибок}
 
 Теперь давайте обсудим какие есть механизмы в языке для работы с ошибками.
 Существуют следующие механизмы:
@@ -34,10 +34,81 @@
 
 \item Если не определен макрос \verb"NDEBUG", он делает проверку условия внутри макроса и если оно ложно, то валит программу с сообщением об ошибке и указанием строчки кода, на которой все упало.
 \end{itemize}
+Вот как выглядит его использование
+\begin{cppcode}
+int f(int* x) {
+  assert(x != nullptr && "The argument must not be nullptr!");
+  return *x;
+}
+
+int main() {
+  int x = 1;
+  assert(x == 1 && "x must be 1!");
+  return 0;
+}
+\end{cppcode}
 
 \item Конструкция \verb"static_assert".
 Это по сути то же самое, что и просто \verb"assert", только данная конструкция выполняет проверки во время компиляции, а не во время исполнения.
 Все проверки условий известных на этапе компиляции должны выполняться этой функцией, а не просто \verb"assert"-ом.
+Вот как выглядит его использование
+\begin{cppcode}
+template<class T>
+class A {
+  static_assert(std::is_arithmetic_v<T>, "The type T must be arithmetic!");
+  ...
+};
+\end{cppcode}
+Строчка в начале класса будет проверяться при компиляции для каждого типа \verb"T".
+И если тип \verb"T" не является арифметическим, то компиляция будет падать с ошибкой, где будет указана строчка, где она произошла, и сообщение.
+
+\item Error codes или коды ошибок.
+Данный подход часто применяется в Си для обработки ошибок.
+Суть его в том, что мы используем возвращаемое значение функции для указания статуса операции, а для возвращения данных используем out аргументы (см.~\ref{}).
+Вот как это выглядит
+\begin{cppcode}
+enum class Status {
+  OK, Error
+};
+
+Status algorithm(const Data& input, Result* output);
+
+int main() {
+  Data data = ...;
+  Result result;
+  Status status = algorithm(data, &result);
+  if (status == Status::OK) {
+    ...
+  } else {
+    ...
+  }
+}
+\end{cppcode}
+
+
+\item \verb"std::expected".
+Начиная с C++23 вам наконец-то доступна возможность возвращать из функции желаемое значение или ошибку.
+По сути это \verb"std::variant<ValueType, ErrorType>" но только с приятным интерфейсом.
+Суть его в том, чтобы использовать коды ошибок, но при этом и ошибку и результат возвращать через \verb"return".
+В коде это выглядит как-то так
+\begin{cppcode}
+class Error {
+  ...
+};
+
+std::expected<Result, Error> algorithm(const Data& data);
+
+int main() {
+  Data data = ... ;
+  auto result = algorithm(data);
+  if (result.has_value()) {
+    Result r = std::move(result).value();
+    ...
+  } else {
+    ...
+  }
+}
+\end{cppcode}
 
 \item Исключения -- Exceptions.
 Это специальная фича языка, которая позволяет генерировать исключения с помощью ключевого слова \verb"throw".
@@ -45,19 +116,82 @@
 Исключения являются опасным механизмом языка, потому что они могут выйти не только из текущего scope, но и в целом подниматься по стеку до тех пор, пока их не поймают или пока исключение не улетит в операционную систему.
 Из-за исключений вы должны всегда думать, что вы можете выйти из любого scope в любой точке.
 Из-за этого весь менеджмент ресурсов доложен быть автоматизирован с помощью RAII (см.~раздел~\ref{section::RAII}).
+В коде это выглядит как-то так
+\begin{cppcode}
+Result algorithm(const Data& data) {
+  ...
+  if (/*some error*/)
+    throw std::runtime_error(/*error information*/);
+  ...
+  return result;
+}
+
+int main() {
+  Data data = ... ;
+  Result result;
+  try {
+    result = algorithm(data);
+  } catch (std::exception& e) {
+    /*handle known exceptions*/
+  } catch (...) {
+    /*handle unknown exceptions*/
+  }
+  return 0;
+}
+\end{cppcode}
 \end{enumerate}
-Главное отличие между этими двумя методами заключается в том, что \verb"assert" -- это безальтернативный механизм уронить вашу программу на первой ошибке.
-Исключения же позволяют как-то на них реагировать в штатном порядке, не завершая работу программы по \verb"terminate".
-В частности отсюда следует, что \verb"assert" уж точно не подходит для реагирования на ошибки при обращении к ресурсам системы, потому что программа не должна завершаться по аварийно.
-А значит \verb"assert" -- это прежде всего механизм для борьбы с bug-ами.
-С исключениями не все так просто.
-Их можно использовать для обоих целей.
-Долгое время главным преимуществом исключений являлось возможность показать текущий стек вызовов.
+Методы выше можно сгруппировать так:
+\begin{enumerate}
+\item Задача \verb"assert" и \verb"static_assert" уронить программу на первой же ошибке.
+Программа не должна продолжать работу в некорректном состоянии.
+Предполагается, что вы как раз ищете ошибку в коде и это должно помочь ее найти.
+Эти методы для дебага.
+
+\item Все остальные методы: коды ошибок, \verb"std::expected" и исключения, предполагают, что вы хотите как-то отреагировать на ошибку при исполнении.
+Самое главное, что вы хотите и можете продолжить исполнение дальше (возможно вы все равно хотите выйти по \verb"terminate", но у вас есть возможность не падать).
+Эти методы предполагают штатное исполнение программы.
+\end{enumerate}
+
+Давайте оценим методы по информативности.
+\begin{enumerate}
+\item \verb"assert" и \verb"static_assert" по умолчанию сообщают вам информацию о строчке кода, на которой произошла ошибка.
+У вас так же есть возможность сообщить любую другую информацию (хотя у \verb"assert" добавление информации делается костылями).
+По умолчанию, нет информации о стеке вызовов для \verb"assert" (для \verb"static_assert" это не имеет смысла, так как она вызывается при компиляции, а не при исполнении).
 Однако начиная с C++23 появилась возможность использовать \verb"std::stacktrace".
 Он, правда, не на столько хорошо отображает информацию, как привычные для нас компиляторы.
-Тем не менее, в плане информативности оба метода сейчас практически одинаковые.
 
-\paragraph{Доступные инструменты}
+\item Коды ошибок и \verb"std::expected".
+Так как и коды ошибок и тип ошибок внутри \verb"std::expected" пишите вы сами, то тут нет информации, которая будет доступна по умолчанию.
+Получить информацию о стеке вызовов вы также можете с помощью \verb"std::stacktrace".
+Начиная с C++20 информацию о строчке кода, где произошла ошибка можно получить с помощью \verb"std::source_location".
+
+\item Исключения.
+По умолчанию класс для исключения пишите вы сами.
+Потому вы можете поместить в него все ту же самую информацию, которая доступна и другими методами, а именно: \verb"std::stacktrace" и \verb"std::source_location".
+Однако, если вы используете дебагер, то при падении на исключении, которое не было поймано, вам дебагер сообщит информацию о стеке вызовов и текущее состояние вашей программы в памяти.
+Это может быть удобно, но это по сути фича дебагера, а не возможности исключений.
+\end{enumerate}
+
+\paragraph{Ожидаемое поведение}
+
+Давайте поймем, какое поведение от программы мы ожидаем при возникновении ошибок.
+Можно выделить следующие случаи:
+\begin{enumerate}
+\item Программа падает с сообщением об ошибке.
+
+\item Программа сообщает об ошибке, корректно ее обрабатывает, продолжает находиться в корректном состоянии и корректно работает дальше.
+\end{enumerate}
+Первое поведение хорошо подходит для разработки приложения, потому что вы хотите найти ошибку как можно раньше, упасть как можно ближе к ней, чтобы найти ее и исправить.
+Нет необходимости работать дальше.
+Второе же поведение желательно на машине пользователя.
+Какой бы ни была ошибка, пользователь не ждет, что программа упадет.
+В худшем случае он ждет информации, что что-то пошло не так.
+В связи с этим \verb"assert" и \verb"static_assert" подходят только для первого поведения и совсем не подходят для второго.
+Их суть ровно в том, чтобы уронить программу как можно раньше.
+В свою очередь коды ошибок, \verb"std::expected" и исключения технически могут быть использованы для обеих ситуаций.
+Это может быть не очень разумно, но никто вам не мешает это сделать.
+
+\subsection{Доступные инструменты}
 
 Давайте поговорим об инструментах, которые позволяют искать ошибки программиста.
 Тут обычно вспоминают два:
@@ -93,7 +227,14 @@
 
 \subsection{Ошибки программиста}
 
-\paragraph{assert}
+\subsubsection{Информация об ошибке}
+% TO DO
+% Есть доклад от чувака, который сделал хороший доклад про  синглтон и как его убрать из кода. Там много хорошей информации по тому, что должно быть в ошибке
+TO DO
+
+\subsubsection{\texttt{assert}}
+
+\paragraph{Как использовать}
 
 К этому макросу можно относиться как к автоматически комментируемым проверкам.
 Работает это так
@@ -118,51 +259,479 @@ void f(int* x) {
 \end{cppcode}
 В этом случае мы передаем адрес статической константы (который всегда не ноль) и он конвертируется к \verb"true" и потом делается логическое <<и>> с проверяемым условием.
 
+\paragraph{Рекомендации}
+
 Мои рекомендации по по использованию \verb"assert" кратко выражаются так: чем больше, тем лучше.
 Чем ближе к багу программа упадет на ошибке, тем быстрее вы его найдете и поправите.
 С \verb"assert"-ами вам скорее всего придется забыть про использование дебагера, так как не понадобится.
 Вот пара мыслей об использовании:
 \begin{enumerate}
 \item  Ставьте \verb"assert" в начале каждой функции, чтобы проверить preconditions.
+Например у оператора деления второй аргумент должен быть не ноль.
+Причем это не ошибка исполнения, это программист должен был проверить этот случай перед вызовом деления.
+То есть программист не предусмотрел валидный случай в программе, на котором падает текущее исполнение.
+\begin{cppcode}
+class Int {
+  ...
+};
+
+Int operator/(Int first, Int second) {
+  assert(second != 0 && "The second argument of operator/ must be non-zero!");
+    return first.value / second.value;
+}
+\end{cppcode}
 
 \item Ставьте \verb"assert" в конце каждой мутирующей функции для проверки postcondition.
+Вдруг вы где-то ошиблись с имплементацией.
+\begin{cppcode}
+template<class T>
+class Tree {
+  using Node = Node<T>;
+public:
+  ...
+  void add_value(T value) {
+    /*place the value in the tree*/
+    assert(is_correct());
+  }
+private:
+  bool is_correct() const:
+  Node* root_ = nullptr;
+};
+\end{cppcode}
 
 \item Все конструкторы класса должны проверять не только preconditions для аргументов, но и инварианты класса.
 Выделите в классе приватные функции по проверке инвариантов и заворачивайте их внутрь \verb"assert".
+\begin{cppcode}
+template<class T>
+class Tree {
+  using Node = Node<T>;
+public:
+  ...
+  void add_value(T value) {
+    /*place the value in the tree*/
+    assert(is_correct());
+  }
+private:
+  bool is_correct() const {
+    return is_correct(root_);  
+  }
+  static bool is_correct(Node* node) {
+    if (node == nullptr)
+      return true;
+    bool is_node_good = /*do checks for node*/;    
+    return is_node_good && is_correct(node->left) && is_correct(node->right);
+  }
+  Node* root_ = nullptr;
+};
+\end{cppcode}
 
 \item Не пишите слишком длинные и сложные выражения внутри \verb"assert", вы иначе никогда не поймете, что вы проверяете.
 Выделите отдельные вспомогательные функции с говорящими названиями.
+Например
+\begin{center}
+\begin{tabular}{ll}
+{
+\begin{minipage}[\baselineskip]{8cm}
+Плохо
+\begin{cppcode}[numbers = none]
+void f(int x, int y, int z) {
+  assert(x > y && y <= z + x &&
+        (x & !y) == 1 && "Ups!");
+  /*function code*/
+}
+\end{cppcode}
+\end{minipage}
+}&{
+\begin{minipage}[\baselineskip]{8cm}
+Получше
+\begin{cppcode}[numbers = none]
+void f(int x, int y, int z) {
+  assert(is_condition_true(x, y, z) &&
+        "Ups!");
+  /*function code*/
+}
+\end{cppcode}
+\end{minipage}
+}
+\end{tabular}
+\end{center}
+Вы конечно можете добавить комментарий и сообщение об ошибке.
+Но все же имя функции скажет больше, чем комментарий.
+Только важно в функциях, которые вызываются внутри \verb"assert" не делать проверок с помощью \verb"assert", а то вы можете уйти в бесконечную рекурсию вызовов \verb"assert".
 
 \item Обязательно вставляйте \verb"assert" перед обращением через указатель, он может быть нулевой.
-Другие методы могут содержать \verb"assert" внутри себя, но если \verb"operator->()" не перегружен (а для указателей он не может быть не перегружен), то вы не можете вставить \verb"assert" внутрь, потому проверки надо делать до вызова функции.
+\begin{cppcode}
+void f(A* a, B* b) {
+  assert(a != nullptr && "a must not be nullptr!");
+  assert(b != nullptr && "b must not be nullptr!");
+  b->consume(a->produce());
+}
+\end{cppcode}
+Обратите внимание, что две разные проверки разнесены в разные \verb"assert"-ы, чтобы при падении было понятно на какое именно условие вы упали.
+
+Если в классе перегружен оператор \verb"operator->()", то соответствующую проверку можно выполнить внутри него.
+Однако, для указателей нельзя этот оператор перегрузить, а потому вам придется делать эту проверку заранее.
+В случае же класса и перегруженного оператора \verb"operator->()" проверка может выглядеть так.
+\begin{cppcode}
+class A {
+public:
+  ...
+  I* operator->() const {
+    assert(ptr_ != nullptr && "The object has invalid pointer!");
+    return ptr_;
+  }
+private:
+  I* ptr_ = nullptr;
+};
+\end{cppcode}
+В данном примере мы можем спокойно звать
+\begin{cppcode}
+int main() {
+  A a;
+  a->f();
+  return 0;
+}
+\end{cppcode}
+Если в объекте \verb"a" хранится нулевой указатель, то в третьей строчке все упадет на проверке по \verb"assert".
 
 \item НЕ делайте \verb"assert" на ошибки, которые разрешимы на этапе компиляции (например в шаблонной магии), для этого используйте \verb"static_assert".
+Следующий пример возможно не самый лучший, тут можно было бы воспользоваться концептами или \verb"std::enable_if" (если вы динозвар из прошлого), но он хорошо иллюстрирует проблему.
+\begin{center}
+\begin{tabular}{ll}
+{
+\begin{minipage}[\baselineskip]{8cm}
+Плохо
+\begin{cppcode}[numbers = none]
+template<class T>
+void f(T x) {
+  assert(std::is_arithmetic_v<T> &&
+         "The type must be arithmetic!");
+  /*function inplementation*/
+}
+\end{cppcode}
+\end{minipage}
+}&{
+\begin{minipage}[\baselineskip]{8cm}
+Получше
+\begin{cppcode}[numbers = none]
+template<class T>
+void f(T x) {
+  static_assert(std::is_arithmetic_v<T> &&
+         "The type must be arithmetic!");
+  /*function inplementation*/
+}
+\end{cppcode}
+\end{minipage}
+}
+\end{tabular}
+\end{center}
 
 \item И конечно же не забывайте сообщить об ошибке текстом.
 Вам же будет проще.
+\begin{center}
+\begin{tabular}{ll}
+{
+\begin{minipage}[\baselineskip]{8cm}
+Плохо
+\begin{cppcode}[numbers = none]
+#include <cassert>
+
+int main() {
+  int x = 1;
+  assert(x == 1);
+  return 0;
+}
+\end{cppcode}
+\end{minipage}
+}&{
+\begin{minipage}[\baselineskip]{8cm}
+Получше
+\begin{cppcode}[numbers = none]
+#include <cassert>
+
+int main() {
+  int x = 1;
+  assert(x == 1 && "x must be 1!");
+  return 0;
+}
+\end{cppcode}
+\end{minipage}
+}
+\end{tabular}
+\end{center}
 \end{enumerate}
 
-
-\paragraph{Кастомные \texttt{assert}}
+\subsubsection{Кастомные \texttt{assert}-ы}
 
 Главный недостаток \verb"assert" заключается в том, что макрос \verb"NDEBUG" отключает сразу все проверки во всех компилируемых файлах.
 Если вам нужно выборочное отключение проверок, то можно сделать свои кастомные макросы на основе \verb"assert" и управлять включением и отключением проверок с помощью дополнительных макросов.
+Вот как могут выглядеть кастомные \verb"assert"-ы.
+\begin{cppcode}
+// file custom_asserts.h
+#include <cassert>
+
+#ifndef DISABLE_ASSERTS
+#define DISABLE_ASSERTS 3
+#endif
+
+#if DISABLE_ASSERTS < 0
+#define ASSERT0(expr, msg) ((void)0)
+#else
+#define ASSERT0(expr, msg) assert(expr && msg)
+#endif
+
+#if DISABLE_ASSERTS < 1
+#define ASSERT1(expr, msg) ((void)0)
+#else
+#define ASSERT1(expr, msg) assert(expr && msg)
+#endif
+
+#if DISABLE_ASSERTS < 2
+#define ASSERT2(expr, msg) ((void)0)
+#else
+#define ASSERT2(expr, msg) assert(expr && msg)
+
+#endif
+
+#if DISABLE_ASSERTS < 3
+#define ASSERT3(expr, msg) ((void)0)
+#else
+#define ASSERT3(expr, msg) assert(expr && msg)
+#endif
+\end{cppcode}
+В этом примере мы вводим $4$ вида \verb"assert"-ов:
+\begin{multicols}{4}
+\begin{itemize}
+\item \verb"ASSERT0"
+
+\item \verb"ASSERT1"
+
+\item \verb"ASSERT2"
+
+\item \verb"ASSERT3"
+\end{itemize}
+\end{multicols}
+Думать про них надо так: чем номер меньше, тем важнее \verb"assert".
+Макрос \verb"DISABLE_ASSERTS" отключает \verb"assert"-ы с уровнем выше заданного.
+То есть \verb"-1" отключает все сообщения об ошибках, \verb"0" оставляет только самые важные \verb"ASSERT0" и так далее.
+Используется это так
+\begin{cppcode}
+#include "custom_asserts.h"
+
+int main() {
+  int x = 0;
+  ASSERT0(x == 0, "x must be 0!");
+  int y = 1;
+  ASSERT1(y == 1, "y must be 1!");
+  int z = 2;
+  ASSERT2(z == 2, "z must be 2!");
+  return 0;
+}
+\end{cppcode}
+При необходимости отключить \verb"assert"-ы после уровня \verb"0" нужно сделать так:
+\begin{cppcode}
+#define DISABLE_ASSERTS 0
+#include "custom_asserts.h"
+
+int main() {
+  int x = 0;
+  ASSERT0(x == 0, "x must be 0!");
+  int y = 1;
+  ASSERT1(y == 1, "y must be 1!"); // is disabled
+  int z = 2;
+  ASSERT2(z == 2, "z must be 2!"); // is disabled
+  return 0;
+}
+\end{cppcode}
+Так же можно сделать \verb"assert"-ы не по уровням, а по управляемому макросу.
+Например, вы хотите сделать проверки для конкретного класса или для конкретного модуля в коде.
+\begin{cppcode}
+// file my_assert.h
+#include <cassert>
+
+#ifndef DISALBE_MY_ASSERT
+#define MY_ASSERT(expr, msg) assert(expr && msg)
+#else
+#define MY_ASSERT() ((void)0)
+#endif
+\end{cppcode}
+Тогда используется это так
+\begin{cppcode}
+#include "my_assert"
+
+int main() {
+  int x = 1;
+  MY_ASSERT(x == 1, "x must be 1!");
+  int y = 2;
+  ASSERT0(y == 2, "y must be 2!");
+  return 0;
+}
+\end{cppcode}
+И для отключения нужно добавить макрос отключения
+\begin{cppcode}
+#define DISALBE_MY_ASSERT
+#include "my_assert.h"
+
+int main() {
+  int x = 1;
+  MY_ASSERT(x == 1, "x must be 1!"); // is disabled
+  int y = 2;
+  ASSERT0(y == 2, "y must be 2!");
+  return 0;
+}
+\end{cppcode}
+Так же можно сделать свитч между тремя опциями: \verb"assert", исключение или ничего.
+Например так
+\begin{cppcode}
+// file my_check.h
+#include <cassert>
+#include <exception>
+
+#ifdef MYASSERT
+#define MyCheck(expr, msg) assert(expr && msg)
+#else
+#ifdef MYEXCEPT
+#define MyCheck(expr, msg)       \
+  if (!expr)                     \
+  throw std::runtime_error(msg)
+#else
+#define MyCheck(expr, msg) ((void)0)
+#endif
+#endif
+\end{cppcode}
+Теперь этот код можно использовать в трех случаях:
+\begin{center}
+\begin{tabular}{lll}
+{
+\begin{minipage}[\baselineskip]{5cm}
+Без проверок
+\begin{cppcode}[numbers = none]
+
+#include "my_check.h"
+
+int main() {
+  int x = 1;
+  MyCheck(x == 1, "Ups!");
+}
+\end{cppcode}
+\end{minipage}
+}&{
+\begin{minipage}[\baselineskip]{5cm}
+Проверка через \verb"assert"
+\begin{cppcode}[numbers = none]
+#define MYASSERT
+#include "my_check.h"
+
+int main() {
+  int x = 1;
+  MyCheck(x == 1, "Ups!");
+}
+\end{cppcode}
+\end{minipage}
+}&{
+\begin{minipage}[\baselineskip]{5cm}
+Бросаем исключение
+\begin{cppcode}[numbers = none]
+#define MYEXCEPT
+#include "my_check.h"
+
+int main() {
+  int x = 1;
+  MyCheck(x == 1, "Ups!");
+}
+\end{cppcode}
+\end{minipage}
+}
+\end{tabular}
+\end{center}
 
 
 % TO DO
 % Добавить тут пример того как сделать несколько макросов, которые отключатся разными командами.
 % Добавить пример макросов с уровнем важности и отключать все макросы по важности ниже, чем данное значение.
 
-\paragraph{Exceptions}
+\subsubsection{Exceptions}
 % TO DO
 
-TO DO
+Если вы хотите проверять ошибки программиста с помощью исключений, то вам надо валить вашу программу соответствующим исключением.
+То есть надо кидать исключение и не перехватывать его.
+Тогда в режиме дебага вы сразу увидите текущее состояние стека вызова и состояние программы в памяти при исполнении.
+Наличие стека вызовов позволит лучше понять происхождение ошибки.
+Однако при таком подходе вам не доступна информация лежащая в самом исключении.
 
-% Добавить пример обработчика исключений.
+Так же не пытайтесь такие ошибки обрабатывать в блоках \verb"catch".
+Иначе вы получите управление логикой программы с помощью исключений.
+Лучше завести какой-то служебный класс для таких ошибок и в перехватчике исключений его выбрасывать из программы.
+Например так
+% TO DO
+% Добавить ссылку на точку входа в программу из MVC раздела
+\begin{center}
+\begin{tabular}{ll}
+{
+\begin{minipage}[\baselineskip]{8cm}
+\begin{cppcode}[numbers = none]
+// file react.h
+struct Die {};
+void react();
+
+// file react.cpp
+void react() {
+  try {
+    throw;
+  } catch (std::exception& e) {
+    /*react to standard exception*/
+  } catch (Die& die) {
+    throw die; // rethrow Die exception
+  } catch (...) {
+    /*react to unknown exception*/
+  }
+}
+\end{cppcode}
+\end{minipage}
+}&{
+\begin{minipage}[\baselineskip]{8cm}
+\begin{cppcode}[numbers = none]
+#include "react.h"
+
+namespace {
+void f() {
+  throw Die{};
+}
+}
+
+int main() {
+  try {
+    f();
+  } catch(...) {
+    react();
+  }
+  return 0;
+}
+\end{cppcode}
+\end{minipage}
+}
+\end{tabular}
+\end{center}
+Обычно дебагер позволит вам не только увидеть стек вызовов, но и прыгнуть в строчку кода, где возникло исключение.
+Так же из плюсов вы увидите текущее состояние всех переменных на стеке.
 
 \subsection{Ошибки исполнения среды}
+% TO DO
+% Общие слова о том, что это за ошибки и как их можно обрабатывать. Пример с быстрым выходом со стека при парсинге.
 
-\paragraph{Exceptions}
+
+\subsubsection{Error Codes}
+% TO DO
+
+\subsubsection{\texttt{std::expected}}
+% TO DO
+
+\subsubsection{Exceptions}
+% TO DO
+
+\paragraph{Зачем?}
+
+\paragraph{Как использовать}
 
 Теперь поговорим о ситуации, когда нужны исключения.
 Причина такой ошибки -- программа хотела, система не смогла.
