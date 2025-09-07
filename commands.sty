@@ -24,3 +24,7 @@
 
 \renewcommand{\Re}{\operatorname{Re}}
 \renewcommand{\Im}{\operatorname{Im}}
+
+\newcounter{gitem}
+\newcommand{\resetgitem}{\setcounter{gitem}{0}}
+\newcommand{\gitem}{\par\addtocounter{gitem}{1}\noindent\textbf{\arabic{gitem})}\; }
