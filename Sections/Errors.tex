@@ -2,7 +2,9 @@
 
 
 \section{Обработка ошибок}
-% TO DO
+
+Очень рекомендую посмотреть доклад Peter Muldoon \href{https://youtu.be/HXJmrMnnDYQ?si=uylqtbTLdzKMrg9S}{Exceptions in C++: Better Design Through Analysis of Real World Usage}.
+Значительная часть этого раздела была написана под влиянием этого доклада.
 
 \subsection{Виды ошибок и доступные средства}
 
@@ -225,12 +227,202 @@ int main() {
 Обычно убираются разные оптимизации, чтобы бинарный код лучше сопоставлялся с исходным кодом.
 Как бы то ни было, если вы пользуетесь только дебагером и санитайзерами -- вы совершаете большую ошибку, потому что на уровне исходного кода у вас куда больше возможностей предотвратить свои ошибки и получить помощь со стороны компилятора.
 
-\subsection{Ошибки программиста}
+\subsection{Информация об ошибке}
+\label{section::ErrorMsg}
 
-\subsubsection{Информация об ошибке}
-% TO DO
-% Есть доклад от чувака, который сделал хороший доклад про  синглтон и как его убрать из кода. Там много хорошей информации по тому, что должно быть в ошибке
-TO DO
+Информация об ошибке нужна для того, чтобы выявить и исправить проблему.
+Это может быть как ошибка на стороне программы, так и на стороне среды исполнения.
+В идеале следующая информация должна быть доступна:
+\begin{enumerate}
+\item Текстовое описание ошибки.
+Технически эту информацию можно хранить в \verb"std::string".
+Данная информация должна быть модифицируемой, чтобы вы могли добавлять информацию об ошибке, при передаче ошибки при раскручивании стека.
+
+\item Строчка в коде, на которой произошла ошибка.
+Для получения этой информации с C++20 можно использовать \verb"std::source_location".
+Эта информация должна быть константной.
+
+\item Состояние стека вызовов во время произошедшей ошибки.
+Для получения этой информации с C++23 можно использовать \verb"std::stacktrace".
+Эта информация должна быть константной.
+
+\item Какая-то специфическая для этой ошибки информация.
+Это произвольный тип, который настраивается под каждую ошибку.
+Данная информация должна быть модифицируемой, чтобы вы могли добавлять информацию об ошибке, при передаче ошибки при раскручивании стека.
+\end{enumerate}
+Независимо от метода, который вы используете и которые описаны ниже, независимо от того ошибка это программиста или ошибка исполнения среды, вам всегда достаточно информации выше.
+При бывает, что можно обойтись меньшим количеством информации,  например, в простых \verb"assert"-ах.
+
+\paragraph{Как собрать информацию о строке кода}
+
+Давайте начнем с простого примера.
+\begin{cppcode}
+#include <source_location>
+
+void f() {
+  std::cout << std::source_location::current() << '\n';
+}
+
+int main() {
+  f();
+  return 0;
+}
+\end{cppcode}
+Где для вывода информации о точке кода делается с помощью следующего оператора:
+\begin{cppcode}
+std::ostream& operator<<(std::ostream& out, const std::source_location& location) {
+  out << location.file_name() << "(" << location.line() << ":"
+      << location.column() << "), function '" << location.function_name()
+      << "'";
+  return out;
+}
+\end{cppcode}
+Вывод будет выглядеть как-то так
+\begin{cppcode}
+main.cpp(4:38), function 'void __cdecl f(void)'
+\end{cppcode}
+То есть функция \verb"current" вызвана в строчке~$4$ и ее имя находится в столбце~$38$.
+А что если мы теперь хотим автоматизировать печать информации и завернуть ее во вспомогательную функцию.
+Тогда можно было бы попытаться написать так
+\begin{cppcode}
+#include <source_location>
+
+void print_location() {
+  std::cout << std::source_location::current() << '\n';
+}
+
+void f() {
+  print_location();
+}
+
+int main() {
+  f();
+  return 0;
+}
+\end{cppcode}
+Но в этом случае будет показана информация о $4$-ой строке, а не о $8$-ой.
+Другой вариант передавать эту информацию явно:
+\begin{cppcode}
+#include <source_location>
+
+void print_location(const  std::source_location& location) {
+  std::cout << location << '\n';
+}
+
+void f() {
+  print_location(std::source_location::current());
+}
+
+int main() {
+  f();
+  return 0;
+}
+\end{cppcode}
+Но это ничуть не лучше, потому что все равно надо писать вызов функции \verb"current".
+Завернуть этот вызов можно только в макрос, иначе она покажет точку в функции обертке, а не где мы ее вызываем.
+Макрос -- плохая идея, потому что вы вводите глобальное имя, которое может потенциально конфликтовать с чем угодно.
+А для избежания конфликта, вам все равно придется давать длинное имя макросу.
+В этом случае есть следующий трюк -- аргументы по умолчанию.
+\begin{cppcode}
+#include <source_location>
+
+void print_location(const  std::source_location& location = std::source_location::current()) {
+  std::cout << location << '\n';
+}
+
+void f() {
+  print_location();
+}
+
+int main() {
+  f();
+  return 0;
+}
+\end{cppcode}
+Теперь вывод будет как надо.
+В этом случае в строчке~$8$ при вызове функции \verb"print_location" логически аргументы по умолчанию считаются в этой строчке до вызова функции.
+Вывод будет:
+\begin{cppcode}
+main.cpp(8:3), function 'void __cdecl f(void)'
+\end{cppcode}
+
+\paragraph{Как собрать информацию о состоянии стека}
+
+В этом случае работают все те же правила и трюки, что использовались в случае информации о точке исполнения в коде.
+Единственное -- нам надо научиться печатать информацию о стеке.
+Начнем опять с простого примера.
+\begin{cppcode}
+#include <stacktrace>
+
+void f() {
+  std::cout << std::stacktrace::current();
+}
+
+int main() {
+  f();
+  return 0;
+}
+\end{cppcode}
+В этом случае оператор вывода для состояния стека определяется так:
+\begin{cppcode}
+std::ostream& operator<<(std::ostream& out, const std::stacktrace& backtrace) {
+  for (auto iter = backtrace.begin(); iter != (backtrace.end()); ++iter) {
+    out << iter->source_file() << "(" << iter->source_line()
+        << "):" << iter->description() << '\n';
+  }
+  return out;
+}
+\end{cppcode}
+Вывод будет выглядеть следующим образом:
+\begin{cppcode}
+PathToProject\main.cpp(5599):Project!f+0x29
+PathToProject\main.cpp(5682):Project!main+0xB
+..\exe_common.inl(79):Project!invoke_main+0x39
+..\exe_common.inl(288):Project!__scrt_common_main_seh+0x132
+..\exe_common.inl(331):Project!__scrt_common_main+0xE
+..\exe_main.cpp(17):Project!mainCRTStartup+0xE
+(0):KERNEL32!BaseThreadInitThunk+0x14
+(0):ntdll!RtlUserThreadStart+0x21
+\end{cppcode}
+Обратите внимание, что нижние~$6$ строк о состоянии стека -- это вызов системных функций и лишь верхние две строчки показывают стек вызова для вашей программы.
+Если вы хотите убрать эти последние~$6$ строк, то можно сделать так:
+\begin{cppcode}
+std::ostream& operator<<(std::ostream& out, const std::stacktrace& backtrace) {
+  static constexpr int bound = 6;
+  if (backtrace.size() < bound)
+    return out;
+  for (auto iter = backtrace.begin(); iter != (backtrace.end() - bound); ++iter) {
+    out << iter->source_file() << "(" << iter->source_line()
+        << "):" << iter->description() << '\n';
+  }
+  return out;
+}
+\end{cppcode}
+Что превратит вывод в
+\begin{cppcode}
+PathToProject\main.cpp(5599):Project!f+0x29
+PathToProject\main.cpp(5682):Project!main+0xB
+\end{cppcode}
+Получилось сильно лучше.
+Если вы хотите автоматизировать сбор информации о стке, то надо так же воспользоваться аргументами по умолчанию.
+\begin{cppcode}
+#include <stacktrace>
+
+void print_stack(const std::stacktrace& stack = std::stacktrace::current()) {
+  std::cout << std::stacktrace::current();
+}
+
+void f() {
+  print_stack();
+}
+
+int main() {
+  f();
+  return 0;
+}
+\end{cppcode}
+
+\subsection{Ошибки программиста}
 
 \subsubsection{\texttt{assert}}
 
@@ -248,6 +440,8 @@ void f(int* x) {
 При компиляции с макросом \verb"NDEBUG" вторая строчка не даст никакого кода.
 А без этого макроса выполняется проверка условия внутри и если оно истинно, то исполнение переходит дальше к строке три.
 Если же оно ложно, то программа падает с сообщением на какой строчке кода она упала.
+Сообщение об ошибке пишется в \verb"stderr".
+Чтобы руками добавить сообщение к \verb"assert" можно писать в поток \verb"std::cerr".
 
 По какой-то странной причине в отличие от \verb"static_assert" макрос \verb"assert" не поддерживает второй аргумент -- сообщение об ошибке.
 Потому приходится прибегать к следующему трюку.
@@ -259,9 +453,60 @@ void f(int* x) {
 \end{cppcode}
 В этом случае мы передаем адрес статической константы (который всегда не ноль) и он конвертируется к \verb"true" и потом делается логическое <<и>> с проверяемым условием.
 
+\paragraph{Информация о стеке вызовов}
+
+Макрос \verb"assert" печатает строчку на которой он упал.
+Потому если строчка содержит текстовую константу, то вы увидите ее содержимое.
+Например
+\begin{cppcode}
+#include <cassert>
+
+int main() {
+  int x = 0;
+  assert(x != 0 && "x must not be 0!");
+  return 0;
+}
+\end{cppcode}
+Вывод будет:
+\begin{cppcode}
+Assertion failed: x != 0 && "x must not be 0!", file PathToProject\main.cpp, line 5
+\end{cppcode}
+Если же вы хотите добавить неконстантную информацию, то вам нужно писать в \verb"std::cerr" перед вызовом \verb"assert".
+Давайте покажем, как это можно сделать на примере добавления информации о стеке вызовов.
+Введем вспомогательную функцию
+\begin{cppcode}
+bool stack_state(const std::stacktrace& backtrace = std::stacktrace::current()) {
+  std::cerr << "Call Stack:\n" << backtrace << '\n';
+  return true;
+}
+\end{cppcode}
+Теперь можно написать следующее:
+\begin{cppcode}
+#include <cassert>
+
+int main() {
+  int x = 0;
+  assert(stack_state() && x != 0 && "x must not be 0!");
+  return 0;
+}
+\end{cppcode}
+Обратите внимание, что вызов функции \verb"stack_state" должен быть самым первым из-за ленивых вычислений в логических операторах.
+Если первое условие ложно в коньюнкции, то второе даже не вычисляется.
+Так же я размещаю вызов этой функции внутри \verb"assert", чтобы при отключении \verb"assert"-ов, эта функция не вызывалась.
+В этом случае вывод будет:
+\begin{cppcode}
+Call Stack:
+PathToProject\main.cpp(5):Project!main+0x25
+
+Assertion failed: stack_state() && x != 0 && "x must not be 0!",
+file PathToProject\main.cpp, line 5
+\end{cppcode}
+Аналогично можно добавлять любую информацию к \verb"assert".
+Информацию о строке кода добавлять не надо, так как она и так выводится.
+
 \paragraph{Рекомендации}
 
-Мои рекомендации по по использованию \verb"assert" кратко выражаются так: чем больше, тем лучше.
+Мои рекомендации по использованию \verb"assert" кратко выражаются так: чем больше, тем лучше.
 Чем ближе к багу программа упадет на ошибке, тем быстрее вы его найдете и поправите.
 С \verb"assert"-ами вам скорее всего придется забыть про использование дебагера, так как не понадобится.
 Вот пара мыслей об использовании:
@@ -426,7 +671,7 @@ void f(T x) {
 \end{tabular}
 \end{center}
 
-\item И конечно же не забывайте сообщить об ошибке текстом.
+\item И конечно же не забывайте сообщить об ошибке текстом или добавить информацию о стеке вызовов или любую другую полезную для дебага информацию.
 Вам же будет проще.
 \begin{center}
 \begin{tabular}{ll}
@@ -465,6 +710,7 @@ int main() {
 
 Главный недостаток \verb"assert" заключается в том, что макрос \verb"NDEBUG" отключает сразу все проверки во всех компилируемых файлах.
 Если вам нужно выборочное отключение проверок, то можно сделать свои кастомные макросы на основе \verb"assert" и управлять включением и отключением проверок с помощью дополнительных макросов.
+Такое может понадобиться, если вы захотите запустить часть недорогих проверок (как например проверка указателя на \verb"nullptr" перед разыменованием) в релизе (который идет в прод) и отключить все дорогие проверки.
 Вот как могут выглядеть кастомные \verb"assert"-ы.
 \begin{cppcode}
 // file custom_asserts.h
@@ -645,13 +891,7 @@ int main() {
 \end{tabular}
 \end{center}
 
-
-% TO DO
-% Добавить тут пример того как сделать несколько макросов, которые отключатся разными командами.
-% Добавить пример макросов с уровнем важности и отключать все макросы по важности ниже, чем данное значение.
-
 \subsubsection{Exceptions}
-% TO DO
 
 Если вы хотите проверять ошибки программиста с помощью исключений, то вам надо валить вашу программу соответствующим исключением.
 То есть надо кидать исключение и не перехватывать его.
@@ -681,7 +921,7 @@ void react() {
   } catch (std::exception& e) {
     /*react to standard exception*/
   } catch (Die& die) {
-    throw die; // rethrow Die exception
+    throw; // rethrow die exception
   } catch (...) {
     /*react to unknown exception*/
   }
@@ -716,20 +956,300 @@ int main() {
 Так же из плюсов вы увидите текущее состояние всех переменных на стеке.
 
 \subsection{Ошибки исполнения среды}
-% TO DO
-% Общие слова о том, что это за ошибки и как их можно обрабатывать. Пример с быстрым выходом со стека при парсинге.
 
+Ошибки исполнения среды -- это ошибки, которые возникают не из-за багов в программе, а из-за того, что есть какие-то внешние проблемы.
+В основном это проблемы с получением доступа к ресурсу среды.
+Вот примеры таких ошибок:
+\begin{enumerate}
+\item Memory Corruption.
+Нарушение целостности памяти.
+Это фатальная ошибка, с которой не возможно бороться и нет смысла бороться.
+Тем не менее, это ошибка исполнения среды.
+
+\item Невозможно открыть файл на чтение или запись.
+Это по сути отсутствие доступа к ресурсу.
+Такие ошибки могут быть как фатальными (без этого файла не возможно исполнение), так и не фатальными (вы знаете, что делать и можете работать дальше, без доступа к этому файлу).
+
+\item Нет запрашиваемого устройства.
+Это по сути отсутствие доступа к ресурсу.
+Такая ошибка может быть как фатальной, так и не фатально.
+Все зависит от вашего приложения и устройства.
+
+\item Процессор не поддерживает нужный вид инструкций.
+Это тоже по сути доступ к ресурсу.
+Вы не можете получить доступ к операциям на процессоре.
+Обычно это не фатальная проблема, вы просто откатываетесь к имплементации, которая не использует недоступные операции.
+
+\item Ошибка при парсинге файла.
+Вам предоставили не корректный ресурс.
+\end{enumerate}
+Ошибки связанные с целостностью памяти мы просто игнорируем.
+Если вашей системе битая память, то вам надо менять железо, а не латать программу.
+Конечно мы можем поговорить на тему <<программируй как NASA>>, но все же это слишком специальный случай.
+
+Ошибки при исполнении можно классифицировать следующим образом:
+\begin{enumerate}
+\item Фатальная ошибка, которая вызывает завершение процесса по \verb"std::terminate"
+
+\item Фатальная ошибка, которая вызывает перезапуск event loop на процессе, но сам процесс не умирает.
+
+\item Локальная ошибка при исполнении, например нет доступа к файлу или некорректное содержимое файла.
+\end{enumerate}
+Под первые два вида ошибок хорошо подходят исключения, потому что они позволяют быстро умереть или быстро подняться по стеку (при этом параллельно накапливая информацию об ошибках и/или логируя их).
+Последний подход плохо решается исключениями.
+Если их решать исключениями, то вы начнете управлять control flow с помощью исключений, а это ошибка дизайна.
+Ошибки третьего типа лучше решать через Error Codes или \verb"std::expected", в особенности если расстояние между бросающим и ловящим исключение кодом на стеке вызовов маленькое.
+Тем не менее, многие сторонние библиотеки по умолчанию обрабатывают локальные ошибки с помощью исключений.
+Один из таких примеров и что с ним делать можно глянуть ниже~\ref{item::example::ExceptionDie}.
+Потому для использования методов из таких библиотек, к ним приходится писать обертки, которые перехватывают исключения и на выходе используют Error Codes или \verb"std::excpected".
+О том, как писать такие обертки можно посмотреть ниже в примере~\ref{item::example::ExceptionLive}.
 
 \subsubsection{Error Codes}
-% TO DO
 
-\subsubsection{\texttt{std::expected}}
-% TO DO
+Большая часть ошибок может быть обработана здесь и сейчас во время вызова функции.
+Например, если вы пытаетесь открыть файл на чтение, а файла нет, то вы просто принимаете решение сообщить об этом пользователю и продолжать работать.
+У вас нет необходимости посылать эту ошибку куда-то далеко по стеку вызовов.
+Или если вы опрашиваете наличие видеокарты, чтобы понять можно ли ее использовать для вычислений.
+Если вам приходит ответ, что ее нет, то вы просто запоминаете это и не используете видеокарту.
+Нет необходимости добираться до \verb"main" раскручивая стек вызовов полностью.
+Для таких ошибок еще в Си используют Error Codes.
+
+Давайте посмотрим как это работает.
+Пусть у вас есть функция
+\begin{cppcode}
+void func(int a, const B& b);
+\end{cppcode}
+и вы хотите сообщить об ошибке из нее.
+Для этого надо понять какие могут быть все виды ошибок, которые могут произойти.
+Для этого заводим \verb"enum class", содержащий статус операции после вызова функции.
+Статус возвращается через \verb"return".
+\begin{cppcode}
+enum class Status {
+  OK, Fatal, Error, Ingored, Pending
+};
+
+Status func(int a, const B& b);
+\end{cppcode}
+Теперь вы можете проверять наличие ошибок так
+\begin{cppcode}
+Status status = func(1, B{});
+if (status != Status::OK) {
+  /*handle an error*/
+}
+\end{cppcode}
+Что делать, если функция возвращает данные через \verb"return"?
+В этом случае надо сделать выходные аргументы (см.~\ref{}). % TO DO
+Например, если функция имеет вид
+\begin{cppcode}
+struct Result {
+  std::string description;
+  int operations = 0;
+};
+
+Result func(int a, const B& b);
+
+int main() {
+  ...
+  Result result = func(1, B{});
+  ...
+}
+\end{cppcode}
+Мы переделаем функцию в
+\begin{cppcode}
+Status func(int a, const B& b, Result* result);
+
+int main() {
+  ...
+  Result result;
+  Status status = func(1, B{}, &result);
+  ...
+}
+\end{cppcode}
+Главный недостаток такого подхода в том, что если \verb"Result" не является default constructible, то есть его нельзя построить неинициализированным, то вы не сможете просто так создать <<пустой>> \verb"result" и потом заполнить его данными.
+В языке Си конечно же есть только структуры и там такой проблемы не бывает.
+В C++ же проблемы все таки есть.
+Многие Сишные библиотеки используют такой подход.
+В операционной системе Windows функции используют такой подход.
+
+\subsubsection{\texttt{std::expected} и \texttt{std::optional}}
+
+Данный подход вертится вокруг идеи про Error Codes.
+Мы не хотим использовать out аргументы у функции.
+В этом случае мы хотим иметь возможность сообщать об ошибке и инициализировать данные, которые не default constructible.
+В любом случае данные должны быть хотя бы movable.
+Если у вас есть хрупкий класс, то его всегда можно сделать movable, если завернуть его имплементацию в \verb"unique_ptr" (стоит поглядеть в~\ref{}). % TO DO
+Главная идея в том, что теперь по \verb"return" мы можем вернуть и данные и ошибку.
+
+\paragraph{Простой пример}
+
+Самый простой вариант -- ошибка не содержит никакой информации.
+В этом случае можно использовать \verb"std::optional".
+Пусть для примера вам нужно прочитать файл.
+При этом нет гарантии, что файл, который вы читаете вообще существует.
+Давайте предположим, что у вас есть функция, которая пытается прочесть данные из файла.
+Пусть функция имеет следующую сигнатуру:
+\begin{cppcode}
+Data read_from_file(const std::filesystem::path& name) ;
+\end{cppcode}
+То есть она всегда по \verb"return" возвращает данные.
+Что тогда должна делать эта функция, когда данных нет (например из-за отсутствия файла или ошибки чтения)?
+Она должна бросить исключение.
+В этом случае использование функции становится неудобным, приходится писать
+\begin{cppcode}
+Data data;
+try {
+  data = read_from_file(file_name);
+} catch (...) {
+  /*react to the error*/
+}
+\end{cppcode}
+И к сожалению это не работает, если \verb"Data" не deafult constructible.
+Так как логически такая функция возвращает либо данные либо ошибку, что данных нет, то можно вернуть \verb"std::optional<Data>".
+\begin{cppcode}
+std::optional<Data> readFromFile(const std::filesystem::path& name) {
+  try {
+    return read_from_file(name);
+  } catch (...) {
+    return std::nullopt;
+  }
+}
+\end{cppcode}
+В этом случае проверка на стороне пользователя выглядит как-то так
+\begin{cppcode}
+auto data = readFromFile(file_name);
+if (data.has_value()) {
+  use_data(*data);
+} else {
+  /*react to the error*/
+}
+\end{cppcode}
+Обратите внимание, что мы не переписываем существующую функцию для чтения из файла (у нас может не быть такой опции, если это сторонняя функция).
+
+\paragraph{Чуть менее простой пример}
+
+В этом примере мы считаем, что ошибка может содержать какие-то данные.
+По сути нам нужен тип \verb"std::variant", который умеет хранить два типа: тип данных и тип ошибки.
+Только при этом мы хотим эти типы трактовать по разному.
+Тип \verb"std::expected" по сути и является частным случаем \verb"std::variant", с подправленным интерфейсом.
+Начнем с примера
+\begin{cppcode}
+struct Data { ... };
+struct Error { ... };
+
+using ExpectedData = std::expected<Data, Error>;
+\end{cppcode}
+Теперь функция возвращающая ошибку может выглядеть так
+\begin{cppcode}
+ExpectData parse_file(const std::filesystem::path &name);
+\end{cppcode}
+В этом случае мы можем не просто узнать, что была ошибка, но и узнать детали об ошибке:
+\begin{cppcode}
+auto data = parse_file(file_name);
+if (!data.has_value()) {
+  /* deal with data.error()*/
+  return;
+}
+use_data(*data);
+\end{cppcode}
+В данном случае есть не симметрия.
+Мы ожидаем, что ошибки это редкость, потому по умолчанию по оператору \verb"operator*" из \verb"std::expected" вынимаются данные.
+В такой парадигме бывает два вида функций:
+\begin{center}
+\begin{tabular}{ll}
+{
+\begin{minipage}[\baselineskip]{8cm}
+Без ошибок
+\begin{cppcode}[numbers = none]
+R function1(const A&);
+\end{cppcode}
+\end{minipage}
+}&{
+\begin{minipage}[\baselineskip]{8cm}
+С ошибками
+\begin{cppcode}[numbers = none]
+std::expected<R, E> function2(const A&);
+\end{cppcode}
+\end{minipage}
+}
+\end{tabular}
+\end{center}
+Функции первого типа -- это функции, которые всегда могут любой вход типа \verb"A" переработать в выход типа \verb"R".
+Функции второго типа не всегда могут отработать и на каких-то входах дают ошибки.
+Потому функции второго типа могут вернуть либо тип \verb"R" в случае успеха, либо тип \verb"E" в случае ошибки.
+
+\paragraph{Компонирование}
+
+Теперь нужно научиться компонировать функции.
+Если у нас только функции, которые не могут совершать ошибки, то в этом нет ничего сложного, это делается на уровне языка композицией:
+\begin{cppcode}
+B function1(const A&);
+C function2(const B&);
+
+C c = function2(function1(a));
+\end{cppcode}
+Однако, если мы хотим работать с ошибками, то у нас периодически будут появляться типы вида \verb"std::expected".
+Давайте обсудим какие есть опции.
+\begin{enumerate}
+\item \verb"transform".
+В данном случае мы хотим выполнить операцию над содержимым \verb"std::expected".
+В этом случае сигнатура функции следующая
+\begin{cppcode}
+R function(const A&);
+\end{cppcode}
+И нам дано
+\begin{cppcode}
+std::expected<A, E> data;
+\end{cppcode}
+Если внутри \verb"data" лежит объект типа \verb"A" мы хотим применить к нему функцию \verb"function" и запаковать результат в \verb"std::expected<R, E>".
+Если же внутри \verb"data" лежит ошибка типа \verb"E", то мы хотим не трогать ее и вернуть \verb"std::expected<R, E>" инициализированную ошибкой из \verb"data".
+Ясно что эту операцию можно сделать руками следующим образом:
+\begin{cppcode}
+std::expected<R, E> result;
+if (data.has_value()) {
+  result = function(*data);
+} else {
+  result = data.error();
+}
+\end{cppcode}
+Эти действия делаются автоматически с помощью метода \verb"transform".
+\begin{cppcode}
+std::expected<R, E> result = data.transform(function);
+\end{cppcode}
+То есть \verb"transform" умеет применять к данным любую функцию, которая не совершает ошибок.
+
+\item \verb"and_then".
+В этом случае мы тоже хотим применить к данным функцию, но только теперь функция может ошибаться, то есть сигнатура функции теперь такая
+\begin{cppcode}
+std::expected<R, E> function(const A&);
+\end{cppcode}
+При этом данные нам даны в следующем виде
+\begin{cppcode}
+std::expected<A, E> data;
+\end{cppcode}
+Мы ожидаем следующее поведение:
+\begin{enumerate}
+\item Если внутри \verb"data" лежат данные, то мы применяем к ним \verb"function" и возвращаем этот результат.
+
+\item Если внутри \verb"data" лежит ошибка, то мы возвращаем \verb"std::expected<R, E>" инициализированный ошибкой из \verb"data".
+\end{enumerate}
+Обратите внимание, что тип ошибки должен быть единый как для данных, так и для функции.
+Ясно, что можно реализовать такое поведение руками следующим образом
+\begin{cppcode}
+std::expected<R, E> result;
+if (data.has_value()) {
+  result = function(*data);
+} else {
+  result = std::unexpected(data.error());
+}
+\end{cppcode}
+Такая операция автоматически делается с помощью \verb"and_then" так:
+\begin{cppcode}
+std::expected<R, E> result = data.and_then(function);
+\end{cppcode}
+Таким образом \verb"and_then" умеет применять к данным с ошибкой любую функцию, которая может совершить ошибку того же типа.
+\end{enumerate}
 
 \subsubsection{Exceptions}
-
-Очень рекомендую посмотреть доклад Peter Muldoon \href{https://youtu.be/HXJmrMnnDYQ?si=uylqtbTLdzKMrg9S}{Exceptions in C++: Better Design Through Analysis of Real World Usage}.
-Значительная часть этого раздела была написана под влиянием этого доклада.
 
 \paragraph{Зачем?}
 
@@ -861,7 +1381,43 @@ int main() {
 \end{enumerate}
 Таким образом, если вы работаете с исключениями, то вообще говоря, вы можете выйти из любого scope в любой точке функции.
 
-\paragraph{Технические детали}
+\subsubsection{Гарантии поведения при исключениях}
+
+Предположим, мы выполняем следующий код
+\begin{cppcode}
+Data d = ...;
+Result r;
+try {
+  r = algorithm(d);
+} catch(...) {
+}
+\end{cppcode}
+Вопрос, если во время выполнения алгоритма было брошено исключение, то в каком состоянии находятся \verb"d" и \verb"r"?
+Если \verb"d" принимается по константной ссылке, то оно гарантировано не меняется, потому нас скорее всего интересует состояние объекта \verb"r".
+Бывает три вида гарантий:
+\begin{enumerate}
+\item Strong Exception Guaranty.
+В этом случае все объекты находятся в состоянии в каком они были до вызова функции бросающей исключение.
+
+\item Basic Exceptioni Guaranty.
+В этом случае все объекты находятся в корректном состоянии, но неизвестно в каком.
+Объектами можно пользоваться, но конкретное состояние не известно и скорее всего не представляет интереса.
+
+\item No Exception Guaranty.
+Никаких гарантий.
+Например, у \verb"r" из примера выше могут быть нарушены инварианты класса.
+\end{enumerate}
+Когда вы пишите код, то важно его писать так, чтобы выполнялись Basic Exception Guaranty.
+Это должно быть опцией по умолчанию.
+Хорошо было бы иметь Strong Exception Guaranty, но это может оказаться дорого.
+Последняя опция допустима только при отключенных исключениях.
+Однако, даже если вы не используете исключения, если вы пишите код с соблюдением Basic Exception Guaranty, то под получается лучше.
+Связано это с тем, что у вас появляются ограничения, которые направляют написание кода в лучшую сторону.
+
+\subsubsection{Технические детали и логическая модель для исключений}
+
+\paragraph{Технические детали, которые надо знать}
+\label{section::ExceptionTechLogic}
 
 Прежде чем обсуждать какие есть сложности при использовании исключений, давайте обсудим технические детали связанные с имплементацией.
 Когда вы кидаете исключения надо помнить о следующем:
@@ -1113,7 +1669,13 @@ int main() {
 \item Как только исключение долетело до блока \verb"try", для него ищется нужный обработчик среди присоединенных \verb"catch" блоков.
 Если нужный обработчик нашелся, то мы вынимаем объект исключения оттуда, где он хранился и отдаем его в распоряжение \verb"catch" блока.
 В конце обработки \verb"catch" блок сам удалит объект исключения, вам не надо об этом заботиться.
+В этом случае исключение логически не в брошенном состоянии, а в пойманном.
+И система помнит это исключение.
+Его можно перебросить по команде \verb"throw" без аргументов.
 \end{enumerate}
+
+\paragraph{Проблемы}
+
 А теперь поговорим, что в этой схеме может пойти не так.
 \begin{enumerate}
 \item Вы можете кинуть исключение, когда другое исключение все еще висит не обработанное.
@@ -1261,7 +1823,7 @@ int main() {
 \]
 \end{enumerate}
 
-\paragraph{Важные примеры и ожидаемое поведение}
+\subsubsection{Важные примеры и ожидаемое поведение для исключений}
 
 \begin{enumerate}
 \item Самый первый пример, который обычно приводя -- выделение памяти.
@@ -1307,6 +1869,35 @@ private:
 };
 \end{cppcode}
 При этом для приличия такое исключение надо поймать в \verb"main", чтобы не падать по \verb"std::terminate".
+
+\item Разумный пример, чтобы умереть и воскреснуть.
+Предположим у вас в потоке крутится сервис, который может упасть в результате любой ошибки и вы хотите этот сервис перезапустить.
+Код для сервиса может выглядеть как-то так:
+\begin{cppcode}
+int main() {
+  Server server;
+  server.run();
+  return 0;
+}
+\end{cppcode}
+Если метод \verb"run" бросает исключение, то можно сделать следующее:
+\begin{cppcode}
+int main() {
+  for (Status status = Running; status != Quit;) {
+    try {
+      Server server;
+      status = server.run(); // if returns normally sets status to be Quit
+    } catch(...) {
+      /*log the error*/
+    }
+  }
+  return 0;
+}
+\end{cppcode}
+В этом случае мы крутимся в бесконечном цикле, пока флаг \verb"status" не имеет значение \verb"Quit".
+Если сервер заканчивает работу в штатном режиме, то метод \verb"run" устанавливает \verb"status" в состояние \verb"Quit" и так мы понимаем, что надо выйти из цикла.
+Если же конструктор \verb"server" или метод \verb"run" умирают по исключению, то мы логируем ошибку и пытаемся еще раз инициализировать \verb"server" и запустить его.
+В таком методе полезно еще установить границу максимального количества перезапусков сервера и максимальную частоту перезапусков.
 
 \item
 \label{item::example::ExceptionLive}
@@ -1420,6 +2011,258 @@ run_program(obj);
 \end{enumerate}
 Если вы используете исключения для чего-то еще, то скорее всего вы делаете что-то не так.
 
+\subsubsection{<<Идеальная>> имплементация}
+\label{section::IdealException}
+
+Богатая иерархия наследования между исключениями -- большая головная боль.
+Вы никогда не запомните (а может быть даже и не узнаете), кто от кого унаследован и унаследован ли и никогда не поставите \verb"catch" блоки в правильном порядке.
+Потому система должна быть максимально простой.
+Нужен обязательно один базовый класс, чтобы можно было ловить сразу все исключения, а все остальные от него унаследованы и отличаются только данными.
+На уровне интерфейса я бы ожидал следующее:
+\begin{cppcode}
+template<class T>
+class Exception {
+public:
+  Exception(std::string description, T data);
+
+  const std::string& what() const;
+  std::string& what();
+  const std::source_location where() const;
+  const std::stacktrace& stack() const;
+  const T& data() const;
+  T& data();
+private:
+  std::string description_;
+  std::source_location location_;
+  std::stacktrace backtrace_;
+  T data_;
+};
+\end{cppcode}
+Обратите внимание, что любое исключение содержит информацию, которую мы обсуждали в разделе~\ref{section::ErrorMsg}, а именно:
+\begin{enumerate}
+\item Текстовое описание ошибки.
+
+\item Точка в коде, где ошибка произошла.
+
+\item Текущее состояние стека.
+
+\item Специфические данные типа \verb"T".
+\end{enumerate}
+В данном подходе все исключения параметризуются типом \verb"T" и для одинакового типа \verb"T" исключения не отличимы.
+
+Заметим, что для \verb"T = void" нужно сделать специальную имплементацию, которую можно так же использовать в качестве базового класса, а именно:
+\begin{center}
+\begin{tabular}{ll}
+{
+\begin{minipage}[\baselineskip]{8.2cm}
+\begin{cppcode}[numbers = none]
+template<>
+class Exception<void> {
+public:
+  Exception(std::string description);
+
+  const std::string& what() const;
+  std::string& what();
+  const std::source_location where() const;
+  const std::stacktrace& stack() const;
+private:
+  std::string description_;
+  std::source_location location_;
+  std::stacktrace backtrace_;
+};
+\end{cppcode}
+\end{minipage}
+}&{
+\begin{minipage}[\baselineskip]{8.2cm}
+\begin{cppcode}[numbers = none]
+template<class T>
+class Exception : public Exception<void> {
+public:
+  Exception(std::string description, T data);
+
+
+
+
+
+  const T& data() const;
+  T& data();
+private:
+  T data_;
+};
+\end{cppcode}
+\end{minipage}
+}\\
+\end{tabular}
+\end{center}
+Давайте обсудим некоторые важные детали.
+\begin{enumerate}
+\item Данные о точке кода, где произошла ошибка, и текущее состояние стека являются константными (это инвариант класса).
+Они создаются в конструкторе и потом доступны только для чтения.
+Поля класса не делаются константами, чтобы обеспечить хорошее поведение value semantics.
+
+\item Строка с описанием и данные типа \verb"T" доступны для модификации.
+Это нужно, если при перебрасывании исключения вам нужно добавить информацию.
+Выглядит это как-то так
+\begin{cppcode}
+try {
+  function(); // throws
+} catch(Exception<void>& e) {
+  e.what() += "info"; // adds extra information
+  throw;
+}
+\end{cppcode}
+Аналогично может понадобиться модификация кастомных данных типа \verb"T".
+
+\item Перехват всех возможных исключений нашего типа делается с помощью перехвата базового класса \verb"Exception<void>", который не содержит кастомных данных.
+\end{enumerate}
+Таким образом логическая схема наследования получается очень простой:
+\[
+\xymatrix{
+  {}&{\texttt{Exception<void>}}
+  	{
+	\save
+   [].[]*[F-]\frm{}
+   \restore
+	}
+  &{}\\
+  {\texttt{Exception<T1>}}\ar[ur]
+    	{
+	\save
+   [].[]*[F-]\frm{}
+   \restore
+	}
+  &{\ldots}&{\texttt{Exception<Tk>}}\ar[ul]
+    	{
+	\save
+   [].[]*[F-]\frm{}
+   \restore
+	}
+\\
+}
+\]
+Теперь приведем имплементацию классов.
+В начале базовый класс.
+\begin{cppcode}
+template<class T>
+class Exception;
+
+template<>
+class Exception<void> {
+public:
+  Exception(std::string description,
+            std::source_location location = std::source_location::current(),
+            std::stacktrace backtrace = std::stacktrace::current())
+      : description_(std::move(description)), location_(std::move(location)),
+        backtrace_(std::move(backtrace)) {
+  }
+  std::string& what() {
+    return description_;
+  }
+  const std::string& what() const {
+    return description_;
+  }
+  const std::source_location where() const {
+    return location_;
+  }
+  const std::stacktrace& stack() const {
+    return backtrace_;
+  }
+private:
+  std::string description_;
+  std::source_location location_;
+  std::stacktrace backtrace_;
+};
+\end{cppcode}
+Обратите внимание, что тут приходится использовать трюк из раздела~\ref{section::ErrorMsg}, чтобы правильно перехватить строку, в которой произошла ошибка и состояние стека.
+Нам важно, чтобы это был не конструктор для исключения, а точка, где вызван конструктор.
+Это возможно с помощью аргументов по умолчанию, потому что они конструируются в точке вызова функции (в данном случае конструктора).
+Теперь классы с дополнительной информацией выглядят так:
+\begin{cppcode}
+template<class T>
+class Exception : public Exception<void> {
+  using Base = Exception<void>;
+
+public:
+  Exception(std::string description, T data,
+            std::source_location location = std::source_location::current(),
+            std::stacktrace backtrace = std::stacktrace::current())
+      : Base(std::move(description), std::move(location), std::move(backtrace)),
+        data_(std::move(data)) {
+  }
+  const T& data() const {
+    return data_;
+  }
+  T& data() {
+    return data_;
+  }
+private:
+  T data_;
+};
+\end{cppcode}
+Обратите внимание, что тут нельзя вызвать базовый конструктор с аргументами по умолчанию, потому что они покажут точку в коде -- текущий конструктор.
+Потому здесь придется руками еще раз прописать аргументы по умолчанию и все аргументы передаем в базовый конструктор.
+
+Теперь для удобства ввода вывода нужно правильно перегрузить потоковые операторы.
+Для отображения места в коде, где произошла ошибка, и текущего состояния стека мы уже писали имплементацию в разделе~\ref{section::ErrorMsg}, однако, для полноты картины я их еще раз тут повторю:%
+\footnote{Если вам интересно, что значит \verb"bound", то загляните в конец раздела~\ref{section::ErrorMsg}.}
+\begin{cppcode}
+std::ostream& operator<<(std::ostream& out, const std::source_location& location) {
+  out << location.file_name() << "(" << location.line() << ":"
+      << location.column() << "), function '" << location.function_name()
+      << "'";
+  return out;
+}
+
+std::ostream& operator<<(std::ostream& out, const std::stacktrace& backtrace) {
+  static constexpr int bound = 6;
+  if (backtrace.size() < bound)
+    return out;
+  for (auto iter = backtrace.begin(); iter != (backtrace.end() - bound); ++iter) {
+    out << iter->source_file() << "(" << iter->source_line()
+        << "):" << iter->description() << '\n';
+  }
+  return out;
+}
+\end{cppcode}
+Теперь нужны удобные операторы для отображения исключений.
+Придется написать оба по-отдельности, потому что в базовом классе отсутствует данное, которое есть в производных классах.
+\begin{cppcode}
+std::ostream& operator<<(std::ostream& out, const Exception<void>& e) {
+  std::cout << "Failed to process: " << e.what() << '\n'
+            << e.where() << '\n'
+            << e.stack();
+  return out;
+}
+
+template<class T>
+std::ostream& operator<<(std::ostream& out, const Exception<T>& e) {
+  std::cout << "Failed to process with code (" << e.data() << ") : " << e.what()
+            << '\n'
+            << e.where() << '\n'
+            << e.stack();
+  return out;
+}
+\end{cppcode}
+Теперь этим можно пользоваться так:
+\begin{cppcode}
+void function() {
+  throw Exception<int>("Some error!", 1);
+}
+
+int main() {
+  try {
+    function();
+  } catch (const Exception<int>& e) {
+    std::cout << e;
+  } catch (const Exception<void>& e) {
+    std::cout << e;
+  } catch (...) {
+  }
+}
+\end{cppcode}
+
+\subsubsection{Рекомендации}
+
 \paragraph{Рекомендации по использованию}
 
 Тут я бы хотел сформулировать несколько соображений о том, как я вижу обработку исключений.
@@ -1493,54 +2336,79 @@ try {
 }
 \end{cppcode}
 Напомню, что блоки \verb"catch" проходятся сверху вниз по одному, и на первом подходящем блоке исключение обрабатывается и последующие \verb"catch" блоки игнорируются.
-
-\end{enumerate}
-
-\paragraph{Гарантии поведения при исключениях}
-
-Предположим, мы выполняем следующий код
+Проблема с этим подходом в том, что вы должны знать отношение наследования между классами, чтобы правильно добавлять обработчики.
+Вот отличный пример
 \begin{cppcode}
-Data d = ...;
-Result r;
 try {
-  r = algorithm(d);
-} catch(...) {
+  ...
+} catch (const std::runtime_error& e) {
+} catch (const std::underflow_error& e) {
+} catch (const std::range_error& e) {
+} catch (const std::logic_error& e) {
+} catch (...) {
 }
 \end{cppcode}
-Вопрос, если во время выполнения алгоритма было брошено исключение, то в каком состоянии находятся \verb"d" и \verb"r"?
-Если \verb"d" принимается по константной ссылке, то оно гарантировано не меняется, потому нас скорее всего интересует состояние объекта \verb"r".
-Бывает три вида гарантий:
-\begin{enumerate}
-\item Strong Exception Guaranty.
-В этом случае все объекты находятся в состоянии в каком они были до вызова функции бросающей исключение.
-
-\item Basic Exceptioni Guaranty.
-В этом случае все объекты находятся в корректном состоянии, но неизвестно в каком.
-Объектами можно пользоваться, но конкретное состояние не известно и скорее всего не представляет интереса.
-
-\item No Exception Guaranty.
-Никаких гарантий.
-Например, у \verb"r" из примера выше могут быть нарушены инварианты класса.
+проблема в том, что диаграмма наследования для исключений выглядит так
+\[
+\xymatrix@R=15pt@C=15pt{
+  {}&{\texttt{std::exception}}
+  	{
+	\save
+   [].[]*[F-]\frm{}
+   \restore
+	}
+  &{}&{}\\
+  {}&{\texttt{std::runtime\_error}}\ar[u]
+    	{
+	\save
+   [].[]*[F-]\frm{}
+   \restore
+	}
+  &{}&{\texttt{std::logic\_error}}\ar[ull]
+    	{
+	\save
+   [].[]*[F-]\frm{}
+   \restore
+	}
+  \\
+  {\texttt{std::underflow\_error}}\ar[ur]
+    	{
+	\save
+   [].[]*[F-]\frm{}
+   \restore
+	}
+  &{}&{\texttt{std::range\_error}}\ar[ul]
+    	{
+	\save
+   [].[]*[F-]\frm{}
+   \restore
+	}
+  &{}\\
+}
+\]
+Это означает, что мы никогда не поймаем исключение в строках~4 и~5, потому что они унаследованы от исключения, перехватываемого в строке~3.
+Помнить наизусть это все невозможно.
+Иерархия на исключениях делает код хрупким.
+Куда проще было бы сразу перехватывать базовый класс.
+\begin{cppcode}
+try {
+  ...
+} catch (const std::exception& e) {
+} catch (...) {
+}
+\end{cppcode}
+В идеале для работы с исключениями можно пользоваться имплементацией описанной в разделе~\ref{section::IdealException}.
 \end{enumerate}
 
-\paragraph{Еще проблемы с исключениями}
-% TO DO
+\subsubsection{Проблемы при использовании исключений}
 
-\paragraph{Примеры использования исключений}
-% TO DO
+Прежде чем вы прочитаете как жизнь с исключениями невыносима, я хочу напомнить про главную пользу исключений.
+Когда вы пишите код, подразумевая, что у вас могут быть исключения, вы находитесь в рамках серьезных ограничений (пусть компилятор их на вас не накладывает, но вы должны это понимать).
+А когда у вас есть серьезные ограничения, то вы всегда пишите код лучше.
 
-\subsection{Exceptions, Stack Unwinding и RAII}
-% TO DO
-% Не нравится как написан раздел.
-% Не логично и не по порядку. Плюс есть пересечения с главами про классы. Надо его пересмотреть и понять что и как пофиксить.
+\paragraph{Менеджмент ресурсов}
 
-\paragraph{Простой пример}
-
-Мы уже с вами говорили, что такое RAII в разделе~\ref{section::RAII}.
-Данный подход позволяет автоматизировать менеджмент ресурсов.
-Пока мы не говорим об исключениях, этот RAII кажется лишь удобной автоматизацией рутинной работы.
-Однако, как только вы включаете исключения в языке, то  программа может выйти из любого scope в совершенно любой точке, а не только по \verb"return", потому что именно так работают исключения.
-Внутри любой функции исключение может возникнуть в любой строчке кода, а значит если исполнилась одна строчка кода, то у вас нет гарантии, что выполнится следующая.
+Так как исключение может возникнуть в любой строчке кода то это значит, что если исполнилась одна строчка кода, то у вас нет гарантии, что выполнится следующая.
 Давайте посмотрим на следующий пример:
 \begin{cppcode}
 void g() {
@@ -1553,88 +2421,24 @@ void f() {
   delete x;
 }
 \end{cppcode}
-В строчке 6 вы явно выделяете память, а в строчке 7 бросается исключение и 8-я строчка никогда не вызовется.
-Как вообще работает код в функции \verb"f".
-Давайте опишу его по строчкам:
-\begin{enumerate}
-\item В строчке 6 происходит сразу несколько вещей.
+В этом примере при вызове \verb"f" мы выйдем из нее в строчке~7, где функция \verb"g" кинет исключение.
+Потому операция \verb"delete" никогда не вызовется.
+Потому когда вы используете исключения, все ресурсы должны менеджериться автоматическими методами с использованием RAII (см. раздел~\ref{section::RAII}).
 
-\begin{enumerate}
-\item Выделение памяти  на стеке для указателя \verb"x".
+\paragraph{Исключения в деструкторах}
 
-\item Вызов оператора \verb"new" для выделения памяти под переменную типа \verb"int", и запись по этому адресу значения \verb"0".
-
-\item Пишем адрес памяти в переменную \verb"x".
-\end{enumerate}
-
-\item В строчке~7 вызываем функцию \verb"g".
-
-\item Функция \verb"g" бросает исключение.
-В этом месте мы вываливаемся из функции \verb"g" в строчку 7 внутри функции \verb"f".
-
-\item В строчке 7 после исключения мы должны выйти из функции \verb"f" и будем так выходить до тех пор, пока не встретим \verb"catch", который поймает исключение.
-Но чтобы выйти мы должны почистить стек от функции \verb"f".
-Это называется stack unwinding.
-Надо удалить все локальные переменные и аргументы функции \verb"f".
-Для этого после строчки 7 вызывается деструктор \verb"x", а так как это встроенный тип, то никакого деструктора нет и мы просто уменьшаем стек и выкидываем переменную \verb"x" со стека.
-
-\item Почистив стек мы выходим в больший scope из которого вызвана \verb"f" и продолжаем вываливаться дальше.
-\end{enumerate}
-
-\paragraph{Проблемы с исключениями}
-
-У этого процесса есть две вещи о которых надо обязательно поговорить.
-\begin{enumerate}
-\item Безопасное выделение ресурсов.
-Чтобы безопасно выделить и удалить память, или любой другой ресурс мы вынуждены пользоваться специальными обертками, которые делают всю работу автоматически при выходе из scope.
-Для памяти такая обертка называется \verb"std::unique_ptr".
-Вот тут простейший пример обертки
-\begin{cppcode}
-class IntPtr {
-  IntPtr(int value) : ptr_(new int(value)) {}
-  IntPtr(const IntPtr) = delete;
-  IntPtr(IntPtr&& other) : ptr_(std::exchange(other.ptr_, nullptr)) {}
-  IntPtr& operator=(const IntPtr&) = delete;
-  IntPtr& operator=(IntPtr&& other) {
-    IntPtr tmp = std::move(other);
-    std::swap(ptr_, tmp.ptr_);
-    return *this;
-  }
-  ~IntPtr() {
-    delete ptr_;
-  }
-  int* ptr() const {
-    return ptr_;
-  }
-private:
-  int* ptr_;
-};
-
-void f() {
-  IntPtr x(0);
-  throw std::runtime_error("Exception");
-}
-\end{cppcode}
-Теперь в строчке~22 происходит выделение памяти в конструкторе \verb"IntPtr".
-А при выходе из \verb"f" по исключению, во время stack unwinding вызовется деструктор для \verb"x" и удалится выделенная память.
-Такой механизм позволяет гарантированно выполнять действия при выходе из любого scope.
-
-\item Обратите внимание на тонкий момент в предыдущей схеме.
-А что если во время stack unwinding вы бросите исключение?
-По стандарту -- это недопустимо.
-Программа упадет в run-time вызовом \verb"terminate".
+В разделе~\ref{section::ExceptionTechLogic} мы обсудили, что нельзя бросать исключения, когда есть активное не пойманное исключение в системе.
+Такое может произойти, когда мы освобождаем стек при выходе из текущего scope.
+В этот момент вызываются деструкторы всех локальных переменных из данного scope.
+А это означает, что ни в коем случае нельзя кидать исключения в деструкторах.
+Если вы это сделаете, то программа упадет в run-time вызовом \verb"terminate".
 Потому никогда не бросайте исключения в деструкторах.
 Это чревато и не работает.
 У вас нет шансов сообщить об ошибке в деструкторе безопасно.
 Их надо обрабатывать внутри самого деструктора.
 Но лучше не кидать никогда.
-\end{enumerate}
 
-\subsection{Исключения и конструирование объектов}
-% TO DO
-% Написать, что исключение в конструкторе обрывает построение объекта и он считается не созданным.
-
-\paragraph{Несколько ресурсов и исключения}
+\paragraph{Правила инициализации объектов и несколько ресурсов}
 
 Теперь, что делать, если вам надо выделить память для двух указателей?
 Тупой вариант такой
@@ -1653,44 +2457,43 @@ IntPtrPair x(1, 2);
 \end{cppcode}
 Беда этого подхода вот в чем.
 Когда вы в строчке 11 вызываете конструктор, то сначала выделяется память под \verb"ptr1_", а потом под \verb"ptr2_".
-И если при первом вызове память выделится, а во втором нет и будет брошено исключение.
-То конструктор не завершит работу, а значит объект не будет считаться построенным, а значит и не вызовется деструктор для него во время stack unwinding.
-А это значит, что память потечет круче вашей подружки.
+И если при первом вызове память выделится, а во втором нет и будет брошено исключение, то конструктор не завершит работу, а значит объект не будет считаться построенным, а значит и не вызовется деструктор для него во время stack unwinding.
+А это значит, что память, выделенная первым вызовом не освободится.
 Есть много костылей для этой проблемы, но правильное решение -- обернуть каждый указатель в свой wrapper.
 Например так
 \begin{cppcode}
 struct IntPtrPair {
-  IntPtrPair(int x, int y) : ptr1_(x), ptr2_(y) {}
+  IntPtrPair(int x, int y) : ptr1_(std::make_unique<int>(x)),
+                             ptr2_(std::make_unique<int>(y)) {}
 
-  IntPtr ptr1_;
-  IntPtr ptr2_;
+  std::unique_ptr<int> ptr1_;
+  std::unique_ptr<int> ptr2_;
 };
 
 IntPtrPair x(1, 2);
 \end{cppcode}
-И теперь вам вообще не надо париться о деструкторах и прочих радостях.
+И теперь вам вообще не надо беспокоиться о деструкторах и прочих радостях, потому что у вас везде value semantics.
 Все это за вас для каждого ресурса делает wrapper для работы с одним указателем.
-На практике, конечно, надо пользоваться библиотечными опциями, тут подойдет \verb"std::unique_ptr".
 
 \paragraph{Зависимые ресурсы и исключения}
 
 Существует еще одна ситуация, о которой стоит рассказать.
 А что если у нас данные зависимы?
-Например, я должен сначала выделить память под \verb"x", а потом выделяя память под \verb"y" я должен туда положить информацию про \verb"x"?
+Например, я должен сначала выделить память под \verb"x", а потом выделяя память под \verb"y", я должен туда положить информацию про \verb"x"?
 То есть у вас есть естественная зависимость порядка конструирования данных.
-А для конструирования по частям как раз и создано наследование.
+Мы уже обсуждали, что для конструирования по частям как раз и создано наследование в разделе~\ref{}.
 Оно собирает объект в определенном порядке.
 Давайте приведу такой пример
 \begin{cppcode}
 struct A {
   A(int x) : ptr_(std::make_unique<int>(x)) {}
+  
   std::unique_ptr<int> ptr_;
 };
 
 struct B : A {
-  A(int x)
-   : A(x),
-     ptr_(std::make_unique<int*>(A::ptr_.get()) {}
+  A(int x) : A(x), ptr_(std::make_unique<int*>(A::ptr_.get()) {}
+     
    std::unique_ptr<int*> ptr_;
 };
 
@@ -1702,67 +2505,173 @@ B x(1);
 Тут прошу обратить внимание на несколько вещей:
 \begin{enumerate}
 \item Я везде пользуюсь wrapper-ами для указателей и мне вообще не надо задумываться про деструкторы.
+
 \item Обратите внимание, что нигде не пользуюсь \verb"new" явно, вместо этого пользуюсь \verb"std::make_unique" функцией.
-\item Если честно, то \verb"std::unique_ptr" не самая высоко оптимизированная вещь.\footnote{Кто-то, читая это, сейчас должен был брызнуть слезами смеха и отчаяния от моей аккуратности в формулировках.} Но для большинства ситуаций этой обертки хватает на ура.
-Правда деревья я бы на ее основе не собирал, как минимум убьете стэк в деструкторе или получите неописуемые тормоза.
+
+\item Если в конструкторе \verb"B" при выделении памяти под \verb"B::ptr_" будет кинуто исключение, то так как базовая часть была построена и ее конструктор завершил работу, то вызовется деструктор базовой части \verb"~A()".
+Это позволяет безболезненно кидать исключения при построении объекта по частям.
 \end{enumerate}
+Вот еще один пример по сборке Thread Pool через Windows Api.
+Для инициализации у нас есть несколько ресурсов:
+\begin{enumerate}
+\item \verb"PTP_POOL pool"
+
+\item \verb"TP_CALLBACK_ENVIRON environment"
+
+\item \verb"PTP_CLEANUP_GROUP cleanup_group"
+\end{enumerate}
+При этом логика инициализации следующая:
+\begin{enumerate}
+\item Создать \verb"pool" так
+\begin{cppcode}
+pool = CreateThreadpool(nullptr);
+\end{cppcode}
+Эта операция может завершиться ошибкой.
+В этом случае \verb"pool" будет \verb"nullptr"
+
+\item Создать \verb"environment" так
+\begin{cppcode}
+InitializeThreadpoolEnvironment(&environment);
+\end{cppcode}
+
+\item Соединить \verb"pool" и \verb"environment" так:
+\begin{cppcode}
+SetThreadpoolCallbackPool(&environment, pool);
+\end{cppcode}
+
+\item Создать \verb"cleanup_group" так
+\begin{cppcode}
+cleanup_group = CreateThreadpoolCleanupGroup();
+\end{cppcode}
+Эта операция может завершиться ошибкой.
+В этом случае \verb"cleanup_group" будет \verb"nullptr".
+
+\item Соединить \verb"environment" и \verb"cleanup_group" так
+\begin{cppcode}
+SetThreadpoolCallbackCleanupGroup(&environment, cleanup_group, nullptr);
+\end{cppcode}
+\end{enumerate}
+Чтобы инициализировать целиком все данные можно сделать следующее.
+Под каждый ресурс заводим класс, который будет за него отвечать.
+После чего наследуем их друг от друга, чтобы инициализировать их в правильном порядке.
+\begin{center}
+\begin{longtable}{ll}
+{
+\begin{minipage}[\baselineskip]{8.2cm}
+\begin{cppcode}[numbers = none]
+class Pool {
+public:
+  Pool();
+  ~Pool();
+  /*other methods*/
+private:
+  PTP_POOL pool_;
+};
+\end{cppcode}
+\end{minipage}
+}&{
+\begin{minipage}[\baselineskip]{9cm}
+\begin{cppcode}[numbers = none]
+Pool::Pool() : pool_(CreateThreadpool(nullptr)) {
+  if (pool_ == nullptr)
+    throw std::runtime_error("Fail!\n");
+}
+
+Pool::~Pool() {
+  CloseThreadpool(pool_);
+}
+\end{cppcode}
+\end{minipage}
+}\\\noalign{\medskip}
+{
+\begin{minipage}[\baselineskip]{8.2cm}
+\begin{cppcode}[numbers = none]
+class Environment : protected Pool {
+public:
+  Environment();
+  ~Environment();
+  /*other methods*/
+private:
+  TP_CALLBACK_ENVIRON environment_;
+};
+\end{cppcode}
+\end{minipage}
+}&{
+\begin{minipage}[\baselineskip]{9cm}
+\begin{cppcode}[numbers = none]
+Environment::Environment() {
+  InitializeThreadpoolEnvironment(&environment_);
+  SetThreadpoolCallbackPool(&environment_, pool_);
+}
+
+Environment::~Environment() {
+  DestroyThreadpoolEnvironment(&environment_);
+}
+\end{cppcode}
+\end{minipage}
+}\\\noalign{\medskip}\newpage
+{
+\begin{minipage}[\baselineskip]{8.2cm}
+\begin{cppcode}[numbers = none]
+class CleanupGroup : protected Environment {
+public:
+  CleanupGroup();
+  ~CleanupGroup();
+  /*other methods*/
+  
+  
+private:
+
+  PTP_CLEANUP_GROUP cleanup_;
+};
+\end{cppcode}
+\end{minipage}
+}&{
+\begin{minipage}[\baselineskip]{9cm}
+\begin{cppcode}[numbers = none]
+CleanupGroup::CleanupGroup()
+  : cleanup_(CreateThreadpoolCleanupGroup()) {
+  if (cleanup_ == nullptr)
+    throw std::exception("Fail!\n");
+  SetThreadpoolCallbackCleanupGroup(
+      &environment_, cleanup_, nullptr);
+}
+CleanupGroup::~CleanupGroup() {
+  assert(cleanup_ != nullptr);
+  CloseThreadpoolCleanupGroup(cleanup_);
+}
+\end{cppcode}
+\end{minipage}
+}\\\noalign{\medskip}
+{
+\begin{minipage}[\baselineskip]{8.2cm}
+\begin{cppcode}[numbers = none]
+class ThreadPool : protected CleanupGroup {
+public:
+  ThreadPool();
+  ~ThreadPool();
+  /*other methods*/
+};
+\end{cppcode}
+\end{minipage}
+}&{
+\begin{minipage}[\baselineskip]{9cm}
+\begin{cppcode}[numbers = none]
+ThreadPool::ThreadPool() = default;
+
+ThreadPool::~ThreadPool() {
+  CloseThreadpoolCleanupGroupMembers(
+      cleanup_, false, nullptr);
+}
+\end{cppcode}
+\end{minipage}
+}\\
+\end{longtable}
+\end{center}
+В такой схеме можно спокойно кидать исключение в любом конструкторе и вся часть класса, построенная на предыдущих этапах очистится корректно.
 
 \paragraph{Другие виды ресурсов}
 
 Аналогично тому, что я написал про память используется для выделения других ресурсов.
 Например для мьютексов используются \verb"std::lock_guard" или похожие механизмы.
 Любой запрос к операционной системе, который требует освобождения своих ресурсов, должен выполняться через wrapper, где в конструкторе вы запрашиваете ресурс, а в деструкторе освобождаете.
-Вот \href{https://github.com/DimaTrushin/TypingAnalysisQt/blob/master/ThreadPool.h}{тут} я могу привести пример того, как я оборачивал Windows нативный thread pool в exception safe обертку.
-Это уже не искусственный пример, где много разных взаимозависимых ресурсов требуют своего последовательного выделения или освобождения.
-Наследование позволяет это сделать удобным и контролируемым.
-Но надо пописать какой-то код.
-Обратите внимание, что в \href{https://github.com/DimaTrushin/TypingAnalysisQt/blob/master/ThreadPool.cpp}{имплементации} методов я даже позволяю себе бросать исключения в конструкторах, при наличии ошибки.
-Тогда все выделенные ресурсы в базовой части автоматом почистятся и не надо переживать на эту тему.
-
-\paragraph{Зависимые ресурсы еще раз}
-% TO DO
-% Перенести наверх в зависимые ресурсы, как вторую альтернативу
-
-Напоследок хочу сказать еще одно замечание про реализацию выделения памяти под зависимые данные.
-Есть другая альтернатива
-\begin{cppcode}
-struct A {
-  A(int x)
-   : ptr1_(std::make_unique<int>(x)),
-     ptr2_(std::make_unique<int*>(ptr1_.get()) {}
-  
-  std::unique_ptr<int> ptr1_;
-  std::unique_ptr<int*> ptr2_;
-};
-
-A x(1);
-\end{cppcode}
-Плюс такого подхода -- не вызываются лишние конструкторы, все делается в одном.
-При сложной цепочке вложенных конструкторов гипотетически можно потратить много на накладные расходы.
-Опять же, это все нужно измерять и я никогда не испытывал с этим проблемы, но быть они могут.
-Минус в том, что этот код хрупкий.
-Вы опираетесь на порядок расположения данных в коде.
-А именно, вариант ниже
-\begin{cppcode}
-struct A {
-  A(int x)
-   : ptr1_(std::make_unique<int>(x)),
-     ptr2_(std::make_unique<int*>(ptr1_.get())) {}
-  
-  std::unique_ptr<int*> ptr2_;
-  std::unique_ptr<int> ptr1_;
-};
-
-A x(1); // incorrect object state
-\end{cppcode}
-порадует вас ошибкой в run-time.
-Ваш объект будет находиться в некорректном состоянии.
-Дело в том, что данные конструируются не в том порядке, в каком они идут в списке инициализации (строки 3 и 4), а в каком они объявлены в классе (строки 6 и 7).
-Так что у вас сначала выполнится строка для инициализации \verb"ptr2_" и в ней вы обратитесь к функции \verb"get" неинициализированной \verb"ptr1_" и получите \verb"nullptr".
-И только потом инициализируете \verb"ptr1_".
-Как вы видите, после отработы конструктора \verb"ptr2_" не будет содержать адрес данных из \verb"ptr1_".
-И такие ошибки хрен найдешь.
-Причем совершить их очень легко -- достаточно переставить данные.
-А со временем вы попросту забудете, что ваши данные были зависимы, ваш код обрастет дополнительными костылями и вы просто не заметите, что это именно эта ситуация.
-Причем, код скомпилируется, запустится и даже отработает, пока вы не упадете на каком-нибудь тонком тесте.
-
