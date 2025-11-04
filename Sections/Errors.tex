@@ -476,9 +476,10 @@ Assertion failed: x != 0 && "x must not be 0!", file PathToProject\main.cpp, lin
 Давайте покажем, как это можно сделать на примере добавления информации о стеке вызовов.
 Введем вспомогательную функцию
 \begin{cppcode}
-bool stack_state(const std::stacktrace& backtrace = std::stacktrace::current()) {
-  std::cerr << "Call Stack:\n" << backtrace << '\n';
-  return true;
+bool stack_state(bool condition, const std::stacktrace& backtrace = std::stacktrace::current()) {
+  if (!condition)
+    std::cerr << "Call Stack:\n" << backtrace << '\n';
+  return condition;
 }
 \end{cppcode}
 Теперь можно написать следующее:
@@ -487,19 +488,17 @@ bool stack_state(const std::stacktrace& backtrace = std::stacktrace::current()) 
 
 int main() {
   int x = 0;
-  assert(stack_state() && x != 0 && "x must not be 0!");
+  assert(stack_state(x != 0) && "x must not be 0!");
   return 0;
 }
 \end{cppcode}
-Обратите внимание, что вызов функции \verb"stack_state" должен быть самым первым из-за ленивых вычислений в логических операторах.
-Если первое условие ложно в коньюнкции, то второе даже не вычисляется.
-Так же я размещаю вызов этой функции внутри \verb"assert", чтобы при отключении \verb"assert"-ов, эта функция не вызывалась.
+Так как вызов функции \verb"stack_state" происходит внутри \verb"assert", то при отключении \verb"assert"-ов, эта функция не будет вызываться.
 В этом случае вывод будет:
 \begin{cppcode}
 Call Stack:
 PathToProject\main.cpp(5):Project!main+0x25
 
-Assertion failed: stack_state() && x != 0 && "x must not be 0!",
+Assertion failed: stack_state(x != 0) && "x must not be 0!",
 file PathToProject\main.cpp, line 5
 \end{cppcode}
 Аналогично можно добавлять любую информацию к \verb"assert".
