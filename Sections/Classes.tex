@@ -1777,7 +1777,7 @@ public:
 class A {
 public:
 };
-A& operator+(A& left, const A& right) {
+A& operator+=(A& left, const A& right) {
   // do something, requires access to A, should be friend
   return left;
 }
