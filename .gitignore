@@ -284,3 +284,4 @@ Plotting/
 
 # Ignore compiled file
 # main.pdf
+tmp*.*
