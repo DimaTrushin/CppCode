@@ -1,0 +1,1301 @@
+\ProvidesFile{Global.tex}[Глобальные ресурсы]
+
+
+\section{Глобальные ресурсы}
+\label{section::Global}
+
+Глобальные ресурсы в C++ является особым видом ресурсов.
+Особенность их вытекает из того, что бывает несколько единиц трансляции, которые компилируются независимо.
+И согласование глобальных ресурсов происходит на этапе линковки, когда все имена глобальные.
+По этому нужно поговорить о том, как правильно работать с такими ресурсами, чтобы не огрести проблем.
+Причина почему нам нужны глобальные ресурсы очень простая -- есть ситуации, когда без них просто нельзя.
+Даже в языке есть свои глобальные ресурсы, например, потоки ввода вывода \verb"std::cout", \verb"std::cin", \verb"std::cerr".
+Обратите внимание, что эти потоки гарантировано существуют всегда во время работы вашей программы и доступны из любой точки программы.
+Часто на уровне операционной системы поддерживается какой-то один глобальный ресурс, например, единственный курсор мыши на всю ОС.
+Вы можете иметь несколько контроллеров, но вы не можете для них иметь независимо несколько курсоров.
+Самый популярный глобальный ресурс -- механизм логирования информации.
+
+\subsection{Что хотим и в чем проблема}
+
+Прежде всего перечислим, что может быть глобальным в C++:
+\begin{enumerate}
+\item Переменные
+
+\item Функции
+
+\item Классы
+
+\item Шаблоны переменных
+
+\item Шаблоны функций
+
+\item Шаблоны классов
+\end{enumerate}
+
+\paragraph{Чего хотим}
+
+Теперь рассмотрим конкретную задачу: мы хотим использовать Logger.
+То есть мы хотим иметь возможность в любой точке программы сделать запись в некоторое заранее определенное хранилище информации для дальнейшего изучения.
+В таком случае плохая идея передавать этот Logger в качестве аргумента в ваши функции, потому что вы замусорите интерфейс ваших функций и методов объектов нерелевантной информацией.
+Например, если у вас есть функция для разложения целого числа на множители
+\begin{cppcode}
+std::vector<LongInt> factorize(const LonstInt&);
+\end{cppcode}
+то мы не хотели бы ее менять на
+\begin{cppcode}
+std::vector<LongInt> factorize(const LonstInt&, Logger&);
+\end{cppcode}
+Во-первых, это просто меняет api, что недопустимо, так как ломает весь код, который использует эту функцию.
+Во-вторых, это ломает abi, теперь ваша функция имеет другое количество аргументов.
+Но самое главное, в-третьих, Logger -- это логически лишний аргумент в методе \verb"factorize".
+Ну потому что это не относится к той работе, которую делает функция.
+Это какая-то работа по изучению поведения программы, отслеживанию проблем при ее исполнении.
+У такого механизма скорее обслуживающий характер и должна быть возможность его быстро включить и выключить, не изменяя код нигде, кроме той точки, где выполняется логирование.
+
+\paragraph{Наивное решение}
+
+Наивное решение заключается в объявлении глобальной переменной для Logger-а и обращение к ней из разных единиц трансляции.
+Давайте обсудим как это должно работать и почему этого механизма не достаточно.
+Предположим у вас следующая структура файлов в проекте:%
+{%
+\input{Sections/GlobalCode}
+\[
+\xymatrix{
+  *+[F:<3pt>]{\usebox{\globalh}}&{}\\
+  *+[F:<3pt>]{\usebox{\globalcpp}}\ar[u]&*+[F:<3pt>]{\usebox{\maincpp}}\ar[ul]\\
+}
+\]
+Давайте объясним что тут происходит.
+В начале разберемся с тем, что происходит при компиляции проекта:
+\begin{enumerate}
+\item В проекте две единицы трансляции:
+\begin{enumerate}
+\item \verb"Global.cpp"
+
+\item \verb"main.cpp"
+\end{enumerate}
+
+\item При компиляции \verb"Global.cpp" компилятор видит код:
+\begin{cppcode}
+// Global TU
+
+class Global {
+public:
+  void f() const;
+private:
+  ...
+};
+
+Global object;
+
+void Global::f() const {
+  std::cout << "f()\n";
+}
+\end{cppcode}
+
+В данной единице трансляции он видит два объекта:
+\begin{enumerate}
+\item Глобальная переменная \verb"object" типа \verb"Global".
+
+\item Метод \verb"Global::f".
+\end{enumerate}
+Значит компилятор создает бинарный файл, в который складывает глобальную переменную \verb"object" и код для функции \verb"Global::f".
+И получается логически следующее:
+\begin{cppcode}
+// Global.bin
+
+Global object
+
+void Global::f:
+  std::cout << "f()\n";
+\end{cppcode}
+Обратите внимание, что определение класса нужно лишь для того, чтобы суметь скомпилировать код.
+Оно необходимо, чтобы понять сколько памяти выделять под \verb"object" при его инициализации в бинарном файле.%
+\footnote{Тут на самом деле еще неявно генерируются дефолтный конструктор и деструктор для \texttt{object}.}
+
+\item При компиляции \verb"main.cpp" компилятор видит код:
+\begin{cppcode}
+// Global main
+
+class Global {
+public:
+  void f() const;
+private:
+  ...
+};
+
+extern Global object;
+
+int main() {
+  object.f();
+  return 0;
+}
+\end{cppcode}
+
+\item При компиляции этой единицы трансляции, компилятор видит три объекта:
+\begin{enumerate}
+\item Глобальная переменная \verb"object", помеченная специальным словом \verb"extern"
+
+\item Функция \verb"Global::f", у которой отсутствует определение.
+
+\item Функция \verb"main" -- точка входа в программу.
+\end{enumerate}
+При компиляции это единицы трансляции происходит следующее:
+\begin{enumerate}
+\item В бинарный файл складывается точка входа в программу -- код функции \verb"main".
+
+\item Переменная помеченная словом \verb"extern" не создается в бинарном файле.
+Это объявление нужно компилятору в строке~13, чтобы понять, что \verb"object.f()" -- это вызов метода \verb"f" у объекта \verb"object" класса \verb"Global".
+Но мы говорим компилятору, что настоящая переменная должна быть заведена в памяти не в текущем бинарнике, а в каком-то другом и пусть линковщик ее сам найдет.
+А если не найдет, то у вас будут проблемы.
+
+\item После чего компилятор видит строчку~14, где находится вызов метода класса.
+Это мы понимаем из объявления класса \verb"Global", который был вставлен директивой \verb"include".
+И так как для нее нет определения, то мы просто ставим точку вызова этой функции в бинарник.
+\end{enumerate}
+В результате получится следующий бинарный файл:
+\begin{cppcode}
+// main.bin
+
+main:
+  call object.f()
+\end{cppcode}
+
+\item Теперь в работу включается линковщик, который сливает вместе бинарные файлы так:
+\begin{cppcode}
+// main.exe
+
+Global object // create in static memory
+
+main:
+  call object.f()
+  
+Global::f:
+  std::cout << "f()\n";
+\end{cppcode}
+\end{enumerate}
+Таким образом про \verb"extern" можно думать, как про ссылку на глобальный объект, которая как бы делается на уровне линковщика.
+
+\paragraph{Проблемы}
+
+Основная идея использования \verb"h" файлов в модели компиляции C++ в том, чтобы зафиксировать в них имена функций, классов и их методов, чтобы при изменении названия метода, компилятор мог нам подсказать в чем проблема и найти все точки в коде, где нужно внести изменения в код.
+В версии выше глобальная переменная, имя которой должно быть точкой доступа к ресурсу, объявляется и определяется внутри \verb"cpp" файла, что скрывает ее изменение ее имени от пользователя.
+Однако, эту проблему можно легко исправить так:
+\[
+\xymatrix{
+  *+[F:<3pt>]{\usebox{\globalAh}}&{}\\
+  *+[F:<3pt>]{\usebox{\globalcpp}}\ar[u]&*+[F:<3pt>]{\usebox{\mainAcpp}}\ar[ul]\\
+}
+\]
+В таком виде это код уже более или менее удобен для использования, но остается важная техническая проблема, которую я хочу обсудить ниже.
+
+\paragraph{Порядок инициализации статических переменных}
+
+Предположим, что у нас теперь есть два глобальных объекта:
+\[
+\xymatrix{
+  *+[F:<3pt>]{\usebox{\globalAh}}&{}&*+[F:<3pt>]{\usebox{\globalBh}}\\
+  *+[F:<3pt>]{\usebox{\globalcpp}}\ar[u]&*+[F:<3pt>]{\usebox{\mainAcpp}}\ar[ul]\ar[ur]&*+[F:<3pt>]{\usebox{\globalBcpp}}\ar[u]\ar@/_20pt/[ull]\\
+}
+\]
+Конструкторы глобальных объектов отрабатывают до старта функции \verb"main".
+Внутри одной единицы трансляции глобальные объекты инициализируются в порядке их определения.
+Однако, между разными единицами трансляции порядок инициализации никоим образом не специфицирован.
+А это значит, что \verb"a" может быть сконструирован раньше, чем \verb"object".
+Но тогда в конструкторе \verb"A::A()" будет обращение к еще не инициализированному объекту в памяти \verb"object".
+Вот эта трудность является основной проблемой в работе с глобальными объектами -- нет гарантии, что глобальный объект создан к моменту его использования.
+Если вы используете глобальные объекты после старта функции \verb"main" и до выхода из нее, то такой проблемы нет.
+Однако, если же вы используете глобальные объекты в деструкторах глобальных объектов, то проблема может всплыть.
+}
+
+\subsection{Singleton}
+\label{section::Singleton}
+
+\paragraph{Scott Mayers Singleton}
+
+Давайте начнем с классического решения -- Scott Mayers Singleton.
+Основная проблема для нас -- глобальные переменные не обязаны быть инициализированы к моменту обращения к ним.
+Эта проблема решается специальным видом глобальных переменных -- статические переменные внутри функции.
+Давайте посмотрим на следующий кусок кода:
+\begin{cppcode}
+class A { ... };
+
+A& instance_A() {
+  static A a;
+  return a;
+}
+\end{cppcode}
+В этом случае функция \verb"access" возвращает ссылку на статическую переменную \verb"a".
+В этом случае \verb"a" является глобальной переменной, которая доступна только внутри функции \verb"access".
+Но у этой переменной особое поведение при инициализации.
+По стандарту эта переменная инициализируется при первом обращении к функции \verb"access".
+Более того, гарантируется, что инициализация такой статической переменной является потокобезопасной.
+Что делает это решение максимально простым и надежным в использовании.
+
+Использование такого глобального ресурса выглядит так:
+\begin{cppcode}
+int main() {
+  instance_A().f();
+  return 0;
+}
+\end{cppcode}
+
+\paragraph{Шаблонное решение}
+
+Теперь давайте завернем Scott Mayers Singleton в шаблонное решение.
+Можно написать следующее решение:
+\begin{cppcode}
+template<class T, class Tag>
+class Global {
+public:
+  using type = T;
+  using tag = Tag;
+
+  static T& instance() {
+    static T data;
+    return data;
+  }
+};
+\end{cppcode}
+В этом случае можно использовать это решение так:
+\begin{cppcode}
+class A {
+public:
+  void f() const;
+  int g(int) const;
+};
+
+using GAmain = Global<A, struct Main>;
+using GAopt = Global<A, struct Optional>;
+
+int main() {
+  GAmain::instance().f();
+  int x = GAmain::instance().g(1);
+  
+  GAopt::instance().f();
+  return 0;
+}
+\end{cppcode}
+В этом случае у шаблона два параметра:
+\begin{enumerate}
+\item Тип \verb"T" глобального объекта, к которому мы получаем доступ.
+
+\item Вспомогательный тип \verb"Tag".
+Этот тип нужен, чтобы суметь создать разные глобальные объекты одного типа.
+Действительно, если бы у нас был бы только один параметр, то мы могли бы написать лишь
+\begin{cppcode}
+using GlobalA = Global<A>;
+\end{cppcode}
+В этом случае для класса типа \verb"A" мы больше не сможем создать других глобальных объектов этого же типа.
+Тег по сути позволяет создавать разные объекты одного типа.
+А заодно имя тега подсказывает назначение глобального объекта.
+\end{enumerate}
+
+\paragraph{Изменение синтаксиса}
+
+Обратите внимание, как нелепо выглядит обращение к методу глобального объекта
+\begin{cppcode}
+GlobalA::access().f();
+\end{cppcode}
+Можно добиться более приятного и удобного синтаксиса с помощью прокси объектов аксессоров.
+Сделать это можно так:
+\begin{cppcode}
+template<class Global>
+class Accessor {
+public:
+  Global::type* operator->() {
+    return &Global::instance();
+  }
+  const Global::type* operator->() const {
+    return &Global::instance();
+  }
+};
+\end{cppcode}
+То есть объект аксессор получает доступ к глобальному ресурсу через оператор стрелку.
+Обратите внимание, что \verb"const" проносится сквозь стрелку.
+Это связано с тем, что константный аксессор должен давать только доступ на чтение, а не константный -- любой.
+Тогда использование будет выглядеть так:
+\begin{cppcode}
+using GlobalA = Global<A, struct Main>;
+using AccessA = Accessor<GlobalA>;
+
+int main() {
+  AccessA a;
+  a->f();
+  int x = a->g(1);
+  return 0;
+}
+\end{cppcode}
+Так код становится более читаемым и менее замусоренным.
+
+\subsection{Singleton с параметрами}
+\label{section::SingletonParams}
+
+Следующий большой вопрос: а что делать, если нам не подходит дефолтный конструктор для глобального объекта?
+Как тогда организовать код, чтобы можно было создать этот объект с нужными параметрами?
+Тут есть следующая проблема: только первое обращение к глобальному ресурсу должно его инициализировать, а все остальные обращения должны его просто использовать.
+Это автоматически означает, что мы должны знать, какое обращение является первым и организовать все остальные обращения после инициализации.
+В частности это означает, что такие глобальные ресурсы нужно инициализировать руками до первого использования.
+Для простейшего решения нам нужна глобальная переменная, к которой есть доступ из двух вспомогательных функций: одна инициализирует эту переменную, а другая предоставляет доступ.
+По умолчанию в языке нет механизма, чтобы шарить между функциями одну вспомогательную глобальную переменную.
+Потому нужны другие механизмы для ограничения несанкционированного доступа к ресурсу.
+Кроме того, нам теперь нужно предоставлять доступ к неициализированному ресурсу.
+
+\paragraph{Концепция решения}
+
+Ресурс можно хранить на куче или в статической памяти.
+\begin{center}
+\begin{tabular}{cc}
+{
+\begin{minipage}[\baselineskip]{8cm}
+В статической памяти.
+\begin{cppcode}[numbers=none]
+class A { ... };
+
+std::optional<A>& data() {
+  static std::optional<A> a;
+  return a;
+}
+\end{cppcode}
+\end{minipage}
+}&{
+\begin{minipage}[\baselineskip]{8cm}
+На куче.
+\begin{cppcode}[numbers=none]
+class A { ... };
+
+std::unique_ptr<A>& data() {
+  static std::unique_ptr<A> a;
+  return a;
+}
+\end{cppcode}
+\end{minipage}
+}\\
+\end{tabular}
+\end{center}
+Теперь можно создать методы инициализации и доступа к данным.
+\begin{center}
+\begin{tabular}{cc}
+{
+\begin{minipage}[\baselineskip]{8cm}
+В статической памяти.
+\begin{cppcode}[numbers=none]
+template<class... Args>
+A& initialize(Args&&... args) {
+  assert(!data());
+  data() = std::make_optional<A>(
+             std::forward<Args>(args)...);
+  return *data();
+}
+
+A& instance() {
+  assert(data());
+  return *data();
+}
+\end{cppcode}
+\end{minipage}
+}&{
+\begin{minipage}[\baselineskip]{8cm}
+На куче.
+\begin{cppcode}[numbers=none]
+template<class... Args>
+A& initialize(Args&&... args) {
+  assert(!data());
+  data() = std::make_unique<A>(
+             std::forward<Args>(args)...);
+  return *data();
+}
+
+A& instance() {
+  assert(data());
+  return *data();
+}
+\end{cppcode}
+\end{minipage}
+}\\
+\end{tabular}
+\end{center}
+Тогда можно использовать данный глобальный ресурс следующим образом:
+\begin{cppcode}
+int main() {
+  //instance().f(); // assert(data()) failed! the object is not initialized yet
+
+  initialize(1, "123");
+  //initialize(1, "abc"); // assert(!data()) failed! reinitialization of the object
+  
+  instance().f();
+  instance().f();
+  return 0;
+}
+\end{cppcode}
+
+\paragraph{Шаблонное решение}
+
+Теперь завернем это в шаблонное решение.
+Я напишу на примере \verb"optional", для указателя делается аналогично.
+\begin{cppcode}
+template<class T, class Tag>
+class Global {
+public:
+  using type = T;
+  using tag = Tag;
+
+  template<class... Args>
+  static T& initialize(Args&&... args) {
+    assert(!data());
+    data() = std::make_optional<T>(std::forward<Args>(args)...);
+    return *data();
+  }
+  static T& instance() {
+    assert(data());
+    return *data();
+  }
+private:
+  static std::optional<T>& data() {
+    static std::optional<T> object;
+    return object;
+  }
+};
+\end{cppcode}
+Так же можно сделать класс аксессор для удобства:
+\begin{cppcode}
+template<class G>
+class Accessor {
+public:
+  usugin T = typename G::type;
+
+  const T* operator->() const {
+    return &G::instance();
+  }
+  T* operator->() {
+    return &G::instance();
+  }
+};
+\end{cppcode}
+И теперь этим можно пользоваться так:
+\begin{cppcode}
+class A { ... };
+
+using GlobalA = Global<A, struct Main>;
+using AccessA = Accessor<GlobalA>;
+
+int main() {
+  GlobalA::initialize(1, "123");
+  GlobalA::instance().f();
+  
+  AccessA a;
+  a->f();
+  return 0;  
+}
+\end{cppcode}
+При наличии класса аксессора можно закрыть доступ по \verb"instance", чтобы избежать уродливого синтаксиса так:
+\begin{center}
+\begin{tabular}{cc}
+{
+\begin{minipage}[\baselineskip]{8cm}
+\begin{cppcode}[numbers=none]
+template<class T, class Tag>
+class Global {
+public:
+  using type = T;
+  using tag = Tag;
+
+  template<class... Args>
+  static T& initialize(Args&&... args) {
+    assert(!data());
+    data() = std::make_optional<T>(
+               std::forward<Args>(args)...);
+    return *data();
+  }
+protected:
+  static T& instance() {
+    assert(data());
+    return *data();
+  }
+private:
+  static std::optional<T>& data() {
+    static std::optional<T> object;
+    return object;
+  }
+};
+\end{cppcode}
+\end{minipage}
+}&{
+\begin{minipage}[\baselineskip]{8cm}
+\begin{cppcode}[numbers=none]
+template<class G>
+class Accessor : G {
+public:
+  usugin T = typename G::type;
+
+  const T* operator->() const {
+    return &G::instance();
+  }
+  T* operator->() {
+    return &G::instance();
+  }
+};
+
+class A { ... };
+
+using GlobalA = Global<A, struct Main>;
+using AccessA = Accessor<GlobalA>;
+
+int main() {
+  GlobalA::initialize(1, "123");
+  AccessA a;
+  a->f();
+  return 0;  
+}
+\end{cppcode}
+\end{minipage}
+}\\
+\end{tabular}
+\end{center}
+В этом случае \verb"Accessor" является производным классом, что позволяет ему иметь доступ к защищенным методам.
+При этом это никак не влияет на содержимое объекта класса \verb"Accessor", потому что базовый класс с глобальным ресурсом не содержит никаких переменных и методов класса (только статические = глобальные методы).
+Так же обратите внимание на проброску \verb"const" сквозь оператор стрелку.
+
+\subsection{Классическое решение}
+
+Если вы посмотрите в различную литературу по паттернам проектирования, то увидите, что авторы поголовно предлагают следующую имплементацию Singleton:
+\begin{cppcode}
+class A {
+public:
+  static A& instance() {
+    static A a;
+    return a;
+  }
+  
+  void f() const {
+    std::cout << "A::f()\n";
+  }
+  
+  int g(int x) const {
+    return 2 * x;
+  }
+private:
+  A() = default;
+  A(const A&) = default;
+  A(A&&) noexcept = default;
+  A& operator=(const A&) = default;
+  A& operator=(A&&) noexcept = default;
+  ~A() = default;
+};
+\end{cppcode}
+И тогда можно пользоваться классом следующим образом:
+\begin{cppcode}
+int main() {
+  A::instance().f();
+  std::cout << "value = " << A::instance().g(1) << '\n';
+  return 0;
+}
+\end{cppcode}
+У такого подхода есть несколько недостатков:
+\begin{enumerate}
+\item Данный класс выполняет две разные задачи, не связанные друг с другом:
+\begin{enumerate}
+\item Обеспечить функциональность класса.
+Это имплементации методов \verb"A::f" и \verb"A::g".
+
+\item Обеспечение глобального доступа к единственному объекту класса \verb"A".
+Это имплементация метода \verb"instance".
+\end{enumerate}
+
+\item Нельзя переиспользовать код для работы с единственным глобальным объектом.
+
+\item При таком подходе на уровне языка запрещено несколько объектов класса \verb"A".
+Это не всегда бывает нужно.
+\end{enumerate}
+Есть еще одна психолоически неприятная вещь, которая возникает при таком подходе к Singleton-ам, -- такой код скрывает зависимости между разными Singleton-ами.
+Ниже будет написано, что в точности я под этим подразумеваю, и в чем может быть проблема.
+
+\subsection{Зависимые Singleton-ы}
+
+Предположим, что у нас есть два глобальных ресурса \verb"A" и \verb"B" и ресурс \verb"B" требует для корректной работы ресурс \verb"A".
+Существует два принципиальных способа как реализовать такую зависимость.
+Первый подход -- напрямую обращаться к глобальному ресурсу.
+Я специально сделаю тут классическую имплементацию.
+\begin{center}
+\begin{tabular}{cc}
+{
+\begin{minipage}[\baselineskip]{8cm}
+\begin{cppcode}[numbers=none]
+class A {
+public:
+  static A& instance();
+  
+  void f() const {
+    std::cout << "A::f()\n";
+  }
+  
+private:
+  A() = default;
+  A(const A&) = default;
+  A(A&&) noexcept = default;
+  A& operator=(const A&) = default;
+  A& operator=(A&&) noexcept = default;
+  ~A() = default;  
+};
+\end{cppcode}
+\end{minipage}
+}&{
+\begin{minipage}[\baselineskip]{8cm}
+\begin{cppcode}[numbers=none]
+class B {
+public:
+  static B& instance();
+  
+  void f() const {
+    A::instance().f();
+    std::cout << "B::f()\n";
+  }
+private:
+  B() = default;
+  B(const B&) = default;
+  B(B&&) noexcept = default;
+  B& operator=(const B&) = default;
+  B& operator=(B&&) noexcept = default;
+  ~B() = default;  
+};
+\end{cppcode}
+\end{minipage}
+}\\
+\end{tabular}
+\end{center}
+Обратите внимание, что так как на уровне языка у нас класс \verb"A" имеет только один объект возвращаемый \verb"A::instance", то нам ничего не мешает логически без зазрения совести напрямую в методах \verb"B" обращаться к методам этой переменной.
+В этом случае код не выглядит подозрительным и даже нормально работает.
+Теперь давайте сделаем то же самое с помощью шаблонного Singleton описанного в разделе~\ref{section::Singleton}.
+\begin{center}
+\begin{tabular}{cc}
+{
+\begin{minipage}[\baselineskip]{8cm}
+\begin{cppcode}[numbers=none]
+class A {
+public:
+
+  void f() const {
+    std::cout << "A::f()\n";
+  }
+};
+
+
+using GlobalA = Global<A, struct Main>;
+using AccessA = Accessor<GlobalA>;
+\end{cppcode}
+\end{minipage}
+}&{
+\begin{minipage}[\baselineskip]{8cm}
+\begin{cppcode}[numbers=none]
+class B {
+public:
+  void f() const {
+    AssessA a;  // this is strange
+    a->f();
+    std::cout << "B::f()\n";
+  }
+};
+
+using GlobalB = Global<B, struct Main>;
+using AccessB = Accessor<GlobalB>;
+\end{cppcode}
+\end{minipage}
+}\\
+\end{tabular}
+\end{center}
+Обратите внимание, что теперь, когда синтаксически класс \verb"A" не обязан иметь один единственный глобальный объект, то обращение к методу\verb"A::f" внутри класса \verb"B" выглядит странным.
+Теперь классу \verb"B" не достаточно знать только класс \verb"A", а надо еще знать какой именно глобальный ресурс этого типа можно использовать.
+Более того, возникает вопрос: а что если я создам переменную типа \verb"B" локально (или создам несколько локальных переменных), то это нормально что они все ссылаются на один и тот же фиксированный глобальный объект?
+При использовании в виде глобальных ресурсов действительно разницы нет, но второй подход к написанию кода помогает увидеть, что у нас есть неявная зависимость, которую лучше сделать явной.
+И видим мы это потому, что наш класс теперь используется не только в виде глобального ресурса.
+
+В этом случае можно явно сохранить в \verb"B" указатель на требуемый ресурс.
+\begin{cppcode}
+class B {
+public:
+  B(A& a) : a_(&a) {}
+  void f() const {
+    a_->f();
+    std::cout << "B::f()\n";
+  }
+private:
+  A* a_;
+};
+\end{cppcode}
+Теперь зависимость от класса \verb"A" явно выражена в аргументах конструктора.
+Однако, мы не можем теперь использовать \verb"B" как глобальный ресурс с дефолтным конструктором, так как у нас больше его нет.
+В этом случае можно добавить дефолтный конструктор, в котором инициализация идет с помощью глобального ресурса \verb"A".
+\begin{cppcode}
+class B {
+public:
+  B() = default;
+  B(A& a) : a_(&a) {}
+  void f() const {
+    a_->f();
+    std::cout << "B::f()\n";
+  }
+private:
+  A* a_ = &A::instance(); // need to implement this method in Global
+};
+\end{cppcode}
+По хорошему порядок создания и разрушения глобальных объектов должен гарантировать, что объект \verb"A::instance" доступный по указателю \verb"a_" будет жив, пока жив объект типа \verb"B".
+
+
+Другой подход -- сделать инициализацию всех объектов явной и передавать все аргументы явно.
+Тут я воспользуюсь шаблоном \verb"Global" из раздела~\ref{section::SingletonParams}.
+\begin{center}
+\begin{tabular}{cc}
+{
+\begin{minipage}[\baselineskip]{8cm}
+\begin{cppcode}[numbers=none]
+class A {
+public:
+
+  void f() const {
+    std::cout << "A::f()\n";
+  }
+};
+
+
+
+
+using GlobalA = Global<A, struct Main>;
+using AccessA = Accessor<GlobalA>;
+\end{cppcode}
+\end{minipage}
+}&{
+\begin{minipage}[\baselineskip]{8cm}
+\begin{cppcode}[numbers=none]
+class B {
+public:
+  B(A& a) : a_(&a) {}
+  void f() const {
+    a_->f();
+    std::cout << "B::f()\n";
+  }
+private:
+  A* a_;
+};
+
+using GlobalB = Global<B, struct Main>;
+using AccessB = Accessor<GlobalB>;
+\end{cppcode}
+\end{minipage}
+}\\
+\end{tabular}
+\end{center}
+Тогда это будет использоваться так
+\begin{cppcode}
+int main() {
+  GlobalA::initialize();
+  GlobalB::initialize(*AccessA());
+  
+  AccessA a;
+  a->f();
+  AccessB b;
+  b->f();
+  return 0;
+}
+\end{cppcode}
+Здесь я подразумеваю, что у аксессора кроме оператора стрелки есть еще оператор \verb"operator*", который возвращает ссылку на глобальный ресурс.
+Таким образом мы получим глобальные ресурсы иницализированные в правильном порядке.
+Отсутствие явной зависимости между классами \verb"A" и \verb"B" в аргументах конструктора для \verb"B" влечет к проблемам при инициализации.
+Действительно, если написать:
+\begin{center}
+\begin{tabular}{cc}
+{
+\begin{minipage}[\baselineskip]{8cm}
+\begin{cppcode}[numbers=none]
+class A {
+public:
+
+  void f() const {
+    std::cout << "A::f()\n";
+  }
+};
+
+
+using GlobalA = Global<A, struct Main>;
+using AccessA = Accessor<GlobalA>;
+\end{cppcode}
+\end{minipage}
+}&{
+\begin{minipage}[\baselineskip]{8cm}
+\begin{cppcode}[numbers=none]
+class B {
+public:
+  void f() const {
+    AccessA a;
+    a->f();
+    std::cout << "B::f()\n";
+  }
+};
+
+using GlobalB = Global<B, struct Main>;
+using AccessB = Accessor<GlobalB>;
+\end{cppcode}
+\end{minipage}
+}\\
+\end{tabular}
+\end{center}
+То при использовании возможны следующие две ситуации:
+\begin{center}
+\begin{tabular}{cc}
+{
+\begin{minipage}[\baselineskip]{8cm}
+\begin{cppcode}[numbers=none]
+int main() {
+  GlobalA::initialize();
+  GlobalB::initialize();
+  
+  AccessA a;
+  a->f();
+  AccessB b;
+  b->f();
+  return 0;
+}
+\end{cppcode}
+\end{minipage}
+}&{
+\begin{minipage}[\baselineskip]{8cm}
+\begin{cppcode}[numbers=none]
+int main() {
+  GlobalB::initialize();  // UB
+  GlobalA::initialize();
+  
+  AccessA a;
+  a->f();
+  AccessB b;
+  b->f();
+  return 0;
+}
+\end{cppcode}
+\end{minipage}
+}\\
+\end{tabular}
+\end{center}
+В этом случае ничто не мешает нам вызвать инициализацию в неверном порядке.
+А это означает, что при обращении в конструкторе \verb"B" к объекту \verb"A", мы получим обращение к еще не созданному объекту.
+А это undefined behaviour.
+
+\subsection{Преинициализация ресурсов}
+
+Существует еще одна ситуация, когда нам может понадобиться вызвать инициализацию глобальных ресурсов руками.
+Обратите внимание, что для Scott Mayers Singleton первое обращение к методу \verb"instance" дорогое, потому что требует инициализации ресурсов.
+Если для вас это критично и вы хотите заранее инициализировать все глобальные ресурсы, то можно заранее вызвать метод обращения к ресурсу. 
+Однако, если вы используете шаблон из раздела~\ref{section::Singleton}, то на стороне пользователя код будет выглядет странно и не понятно:
+\begin{cppcode}
+class A { ... };
+
+using GlobalA = Global<A, struct Main>;
+using AccessA = Accessor<GlobalA>;
+
+int main() {
+  GlobalA::instance(); // initialization
+  
+  GlobalA::instance().f();
+  AccessA a;
+  a->f();
+  return 0;
+}
+\end{cppcode}
+В этом случае лучше перейти на решение из раздела~\ref{section::SingletonParams} даже при использовании дефолтных конструкторов.
+\begin{cppcode}
+class A { ... };
+
+using GlobalA = Global<A, struct Main>;
+using AccessA = Accessor<GlobalA>;
+
+int main() {
+  GlobalA::initialize();
+  
+  GlobalA::instance().f();
+  AccessA a;
+  a->f();
+  return 0;
+}
+\end{cppcode}
+В этом случае код говорит в точности то, что он делает.
+
+\subsection{Рефакторинг Singleton-ов}
+
+Если вы столкнулись с кодом, в котором используются Singleton-ы и вы хотите от них избавиться, не ломая при этом уже написанный код, то есть одна разумная тактика, которую я хочу продемонстрировать.
+
+\paragraph{Функции}
+
+Предположим, что у вас есть функция, которая внутри использует глобальный ресурс.
+Пусть для определенности будет что-то в таком духе:
+\begin{cppcode}
+int function(int x, double y, const B& z) {
+  // some code
+  GlobalA::instance().f();
+  //some code
+  return /*something*/;
+}
+\end{cppcode}
+Теперь мы хотим избавиться от этой зависимости от глобального объекта.
+Его для этого его можно передать явно в качестве аргумента:
+\begin{cppcode}
+int function(int x, double y, const B& z, A& obj) {
+  // some code
+  obj.f();
+  //some code
+  return /*something*/;
+}
+\end{cppcode}
+Однако. таким образом мы сломали api, а значит и код, который использует нашу функцию.
+\begin{cppcode}
+int main() {
+  B b;
+  int z = func(1, 2.0, b); //  compilation error
+  return 0;
+}
+\end{cppcode}
+Теперь такой вызов перестанет компилироваться.
+Исправить ситуацию можно так:
+\begin{cppcode}
+int function(int x, double y, const B& z, A& obj =  GlobalA::instance()) {
+  // some code
+  obj.f();
+  //some code
+  return /*something*/;
+}
+\end{cppcode}
+Так мы решили проблему и код
+\begin{cppcode}
+int main() {
+  B b;
+  int z = func(1, 2.0, b); // compiles
+  return 0;
+}
+\end{cppcode}
+Однако, мы таким образом сломали abi.
+Действительно до этого была функция $3$ аргументов, а теперь функция $4$ аргументов.
+А это другая работа со стеком вызовов.
+Если это принципиально, то можно воспользоваться перегрузкой функций:
+\begin{cppcode}
+int function(int x, double y, const B& z, A& obj) {
+  // some code
+  obj.f();
+  //some code
+  return /*something*/;
+}
+
+int function(int x, double y, const B& z) {
+  return function(x, y, z, GlobalA::instance());
+}
+\end{cppcode}
+Теперь старая функция определена в терминах новой функции.
+И старый код будет работать
+\begin{cppcode}
+int main() {
+  B b;
+  int z = func(1, 2.0, b); // compiles
+  return 0;
+}
+\end{cppcode}
+И abi при вызове функции сохранится.
+Изменится имплементация, но это ожидаемое поведение.
+Подобная техника позволяет оставить там, где не надо ничего менять, код, который работает с глобальными ресурсами.
+А там, где нужна работа с чем-то локальным, использовать перегруженную версию с явным указанием объекта.
+
+\paragraph{Методы класса и объекты класса}
+
+Теперь предположим, что у вас есть класс, который внутри себя в своих методах использует глобальный ресурс.
+Например что-то такое:
+\begin{cppcode}
+class A {
+public:
+  void function() const {
+    // some code
+    GlobalB::instance().f();
+    // some code
+  }
+private:
+  S data_;
+};
+\end{cppcode}
+В этом случае есть несколько вариантов:
+\begin{enumerate}
+\item Передавать явно в аргументах методов.
+
+\item Сделать глобальным ресурсом внутри класса.
+
+\item Сделать локальную ссылку внутри каждого объекта.
+\end{enumerate}
+В первом случае это выглядит так:
+\begin{cppcode}
+class A {
+public:
+  void function(GlobalB& obj) const {
+    // some code
+    obj.f();
+    // some code
+  }
+  void function() const {
+    function(GlobalB::instance());
+  }
+private:
+  S data_;
+};
+\end{cppcode}
+Второй подход подразумевает, что мы для класса \verb"A" создадим глобальный ресурс спрятанный внутри самого класса так:
+\begin{cppcode}
+class A {
+  using MyGlobalB = Global<B, Main>;
+public:
+  void function() const {
+    // some code
+    MyGlobalB::instance().f(); // A::MyGlobalB is used here
+    // some code
+  }
+private:
+  S data_;
+};
+\end{cppcode}
+Обратите внимание, что полное имя тега будет \verb"A::Main", а потому у нас точно не будет случайного пересечения с тегом любого другого глобального ресурса.
+
+В последнем подходе, мы сохраняем версию глобального объекта внутри при конструировании:
+\begin{cppcode}
+class A {
+public:
+  A() = default;
+  A(B& obj) : obj_(obj) {}
+  void function() const {
+    // some code
+    obj().f();
+    // some code
+  }
+
+private:
+  B&  obj() const {
+    return obj_.get();
+  }
+  
+  S data_;
+  std::reference_wrapper<B> obj_ = GlobalB::instance();
+};
+\end{cppcode}
+Тут хранение происходит в \verb"reference_wrapper" для обеспечение value semantics класса.
+Можно было бы использовать указатель, но тогда за инвариант, что указатель не нулевой должен был бы отвечать класс.
+Вместо этого за этот инвариант отвечает само поле класса.
+Важно, чтобы ссылка на ресурс была жива все время жизни объекта класса \verb"A".
+Ссылка на глобальный ресурс в этом случае работает безопасно.
+Так же чтобы избежать длинных вызовов вида
+\begin{cppcode}[numbers = none]
+obj_.get().f();
+\end{cppcode}
+вводится вспомогательная функция для обращения к ссылке хранящейся внутри \verb"reference_wrapper".
+Такой подход меняет abi, потому что меняется layout для объекта класса, как минимум его размер увеличивается на один указатель.
+Зато теперь объект класса служит как контекст для передачи ресурса своим полям.
+Например можно протолкнуть зависимость так:
+\begin{cppcode}
+class A {
+public:
+  A() = default;
+  A(B& obj) : obj_(obj) {}
+  ...
+private:
+  B&  obj() const {
+    return obj_.get();
+  }
+
+  std::reference_wrapper<B> obj_ = GlobalB::instance();
+  S data_ = obj();
+};
+\end{cppcode}
+Обратите внимание, что для такой махинации нам надо будет переставить поля, чтобы инициализация прошла в правильном порядке.
+
+\subsection{Logging}
+
+Предположим, что мы хотим использовать удобный механизм логирования информации.
+Для этого нам нужен объект сериализатор%
+\footnote{Про сериализатор можно чуть-чуть почитать тут~\ref{section::Serialization}.}
+и шаблон для получения доступа к глобальному ресурсу.
+Выглядеть это может так
+\begin{cppcode}
+class Logger {
+public:
+   template<class T>
+   Logger& operator<<(const T&) {
+     /*Implemetation for each class T*/
+   }
+   ...
+private:
+  ...
+};
+
+inline Logger& main_logger() {
+  using MainLogger = Global<Logger, struct Main>;
+  return MainLogger::instance();
+}
+\end{cppcode}
+Теперь использование будет выглядеть как-то так
+\begin{cppcode}
+void function(int x, const A& y) {
+  // some code
+  main_logger() << "x = " << x << ", y = " << y << '\n';
+  // some code
+}
+\end{cppcode}
+
+\subsection{Подсчет количества операций}
+
+Предположим, вы хотите понять на сколько аккуратно вы пользуетесь value semantics.
+Например, вы не делаете лишних копий там, где этого не нужно.
+Для этого можно организовать подсчет количества копирований объектов при исполнении.
+Общая идея решения такая: создадим класс, который умеет считать количество вызовов своих конструкторов, деструкторов и перемещающих операторов, а потом унаследуемся от этого класса.
+Подсчет можно делать глобально на протяжении жизни всей программы, а можно локально только в рамках какого-то scope.
+Сразу оговорюсь, что решение ниже не поддерживает многопоточность.
+Многопоточное решение -- это совсем другой разговор, который я тут вести не хочу.
+Так же отмечу, что хоть мы и считаем только конструкторы, присваивания и деструкторы, но вообще говоря подобным методом можно считать количество вызовов любого метода или операций.
+Например так можно автоматизировать подсчет количества проделанных операций над объектами.
+Это позволяет при запуске алгоритма проверить реальное количество проделанных операций с более или менее локальным вмешательством в код.
+
+\paragraph{Использование}
+
+Прежде чем работать над имплементацией, давайте обсудим, как мы видим использование подобного функционала.
+Вот пусть у нас есть класс \verb"A" и мы хотим посчитать во время работы программы сколько раз срабатывают операции копирования в программе.
+В этом случае добавим публичное наследование от служебного класса:
+\begin{cppcode}
+class A : public CTorCheck<A> {
+public:
+  A() = default;
+  A(int);
+  ...
+private:
+  ...
+};
+\end{cppcode}
+Все больше ничего  делать не надо.
+Теперь при исполнении следующего кода:
+\begin{cppcode}
+int main() {
+  algorithm(); // some algorithm using objects of class A
+  return 0;
+}
+\end{cppcode}
+после выхода из функции \verb"main", мы получим информацию о количестве выполненных операций:
+\begin{enumerate}
+\item Количество вызванных конструкторов.
+
+\item Количество вызванных копирующих конструкторов.
+
+\item Количество вызванных перемещающих конструкторов.
+
+\item Количество вызванных копирующих присваиваний.
+
+\item Количество вызванных перемещающих присваиваний.
+
+\item Количество вызванных деструкторов.
+\end{enumerate}
+
+\paragraph{Имплементация считающего объекта}
+
+Давайте в начале создадим класс \verb"Counter", который будет отвечать за счетчики.
+У него будет следующая функциональность:
+\begin{enumerate}
+\item При конструировании заводит счетчики для всех шести методов и инициализирует их нулями.
+
+\item Для каждого счетчика есть метод увеличения его значения на единицу вверх.
+
+\item В деструкторе выводится информация пользователю о значениях счетчиков.
+\end{enumerate}
+Имплементировать класс можно следующим образом:
+\begin{cppcode}
+class Counter {
+public:
+  Counter() = default;
+  ~Counter() {
+    print_counters();
+  }
+
+  void increase_ctor() {
+    ++ctor_counter_;
+  }
+  void increase_copy_ctor() {
+    ++copy_ctor_counter_;
+  }
+  void increase_move_ctor() {
+    ++move_ctor_counter_;
+  }
+  void increase_copy_asgmnt() {
+    ++copy_asgmnt_counter_;
+  }
+  void increase_move_asgmnt() {
+    ++move_asgmnt_counter_;
+  }
+  void increase_dtor() {
+    ++dtor_counter_;
+  }
+  
+private:
+  void print_counter() const;
+
+  uint64_t ctor_counter_ = 0;
+  uint64_t copy_ctor_counter_ = 0;
+  uint64_t move_ctor_counter_ = 0;
+  uint64_t copy_asgmnt_counter_ = 0;
+  uint64_t move_asgmnt_counter_ = 0;
+  uint64_t dtor_counter_ = 0;
+};
+\end{cppcode}
+Для красоты можно еще удалить копирующие и мувающие операции на счетчике.
+Имплементация печати может быть такой:
+\begin{cppcode}
+void Counter::print_counter() const {
+  std::cout << "Statistics:\n";
+  std::cout << "ctors: " << ctor_counter_ << '\n';
+  std::cout << "copys: " << copy_ctor_counter_ << '\n';
+  std::cout << "moves: " << move_ctor_counter_ << '\n';
+  std::cout << "copy=: " << copy_asgmnt_counter_ << '\n';
+  std::cout << "move=: " << move_asgmnt_counter_ << '\n';
+  std::cout << "dtors: " << dtor_counter_ << '\n';
+}
+\end{cppcode}
+В этот класс можно добавить информацию об имени класса, для которого ведется подсчет, но я специально делаю минимальный работающий пример.
+
+\paragraph{Имплементация \texttt{CTorCheck}}
+
+Теперь имплементация класса \verb"CTorCheck", который будет выполнять вычисления со счетчиком:
+\begin{cppcode}
+template<class T>
+class CTorCheck {
+public:
+  CTorCheck() {
+    GCounter::instance().increase_ctor();
+  }
+  CTorCheck(const CTorCheck&) {
+      GCounter::instance().increase_copy_ctor();
+  }
+  CTorCheck(CTorCheck&&) noexcept {
+      GCounter::instance().increase_move_ctor();
+  }
+  CTorCheck& operator=(const CTorCheck&) {
+    GCounter::instance().increase_copy_asgmnt();
+    return *this;
+  }
+  CTorCheck& operator=(CTorCheck&&) noexcept {
+    GCounter::instance().increase_move_asgmnt();
+    return *this;
+  }
+  ~CTorCheck() {
+    GCounter::instance().increase_dtor();
+  }
+private:
+  using GCounter = Global<Counter, struct Tag>;
+};
+\end{cppcode}
+Давайте поясним, что тут происходит.
+\begin{enumerate}
+\item В строке $23$ заводится глобальный объект типа \verb"Counter".
+Обратите внимание, что полный тип будет следующий
+\begin{cppcode}[numbers = none]
+using GCounter = Global<Counter, CTorCheck<T>::Tag>;
+\end{cppcode}
+Таким образом для разных типов \verb"T" будут созданы разные счетчики.
+
+\item В строках с $4$-й по $21$-ю каждый метод просто увеличивает свой счетчик внутри глобального \verb"GCounter".
+\end{enumerate}
+Такая имплементация создает глобальный счетчик при первом вызове.
+А потому ее можно использовать даже для подсчета количества операций для глобальных объектов.

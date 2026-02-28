@@ -1,0 +1,145 @@
+\ProvidesFile{GlobalCode.tex}[Код для раздела Глобальные ресурсы]
+
+
+\newcommand{\codewidth}{5cm}
+
+\newsavebox\globalh
+\begin{lrbox}{\globalh}%
+\begin{minipage}[\baselineskip]{\codewidth}
+\texttt{Global.h}
+\begin{cppcode}[numbers = none]
+#pragma once
+
+class Global {
+public:
+  void f() const;
+private:
+  ...
+};
+\end{cppcode}
+\end{minipage}%
+\end{lrbox}
+
+\newsavebox\globalcpp
+\begin{lrbox}{\globalcpp}%
+\begin{minipage}[\baselineskip]{\codewidth}
+\texttt{Global.cpp}
+\begin{cppcode}[numbers = none]
+#include "Global.h"
+#include <iostream>
+
+Global object;
+
+void Global::f() const {
+  std::cout << "f()\n";
+}
+\end{cppcode}
+\end{minipage}%
+\end{lrbox}
+
+\newsavebox\maincpp
+\begin{lrbox}{\maincpp}%
+\begin{minipage}[\baselineskip]{\codewidth}
+\texttt{main.cpp}
+\begin{cppcode}[numbers = none]
+#include "Global.h"
+
+extern Global object;
+
+int main() {
+  object.f();
+  return 0;
+}
+\end{cppcode}
+\end{minipage}%
+\end{lrbox}
+
+\newsavebox\globalAh
+\begin{lrbox}{\globalAh}%
+\begin{minipage}[\baselineskip]{\codewidth}
+\texttt{Global.h}
+\begin{cppcode}[numbers = none]
+#pragma once
+
+class Global {
+public:
+  void f() const;
+private
+  ...
+};
+
+extern Global object;
+\end{cppcode}
+\end{minipage}%
+\end{lrbox}
+
+\newsavebox\mainAcpp
+\begin{lrbox}{\mainAcpp}%
+\begin{minipage}[\baselineskip]{\codewidth}
+\texttt{main.cpp}
+\begin{cppcode}[numbers = none]
+#include "Global.h"
+
+
+
+int main() {
+  object.f();
+  return 0;
+}
+\end{cppcode}
+\end{minipage}%
+\end{lrbox}
+
+\newsavebox\globalBh
+\begin{lrbox}{\globalBh}%
+\begin{minipage}[\baselineskip]{\codewidth}
+\texttt{A.h}
+\begin{cppcode}[numbers = none]
+#pragma once
+
+class A {
+public:
+  A();
+private
+  ...
+};
+
+extern A a;
+\end{cppcode}
+\end{minipage}%
+\end{lrbox}
+
+\newsavebox\globalBcpp
+\begin{lrbox}{\globalBcpp}%
+\begin{minipage}[\baselineskip]{\codewidth}
+\texttt{A.cpp}
+\begin{cppcode}[numbers = none]
+#include "A.h"
+#include "Global.h"
+
+A a;
+
+A::A() {
+  object.f();
+}
+\end{cppcode}
+\end{minipage}%
+\end{lrbox}
+
+\newsavebox\mainBcpp
+\begin{lrbox}{\mainBcpp}%
+\begin{minipage}[\baselineskip]{\codewidth}
+\texttt{main.cpp}
+\begin{cppcode}[numbers = none]
+#include "Global.h"
+#include "A.h"
+
+
+int main() {
+  object.f();
+  return 0;
+}
+\end{cppcode}
+\end{minipage}%
+\end{lrbox}
+
