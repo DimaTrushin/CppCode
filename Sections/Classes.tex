@@ -1200,6 +1200,7 @@ using Scale = Alias<double, struct scale_tag>;
 \end{enumerate}
 
 \subsubsection{Named Constructor Idiom и RVO/NRVO}
+\label{section::NamedCtorIdiom}
 
 Предположим, что мы хотим написать класс комплексных чисел и сделать в нем два конструктора.
 Один создает комплексное число по вещественной и мнимой части, другой по радиусу и аргументу.
@@ -1276,8 +1277,355 @@ private:
 };
 \end{cppcode}
 
-%\subsubsection{Конструирование сложных объектов и Builder Pattern}
-%\label{section::Builder}
+\subsubsection{Конструирование сложных объектов и Builder Pattern}
+\label{section::Builder}
+
+Предположим, что вам надо создать сложный объект с большим количеством аргументов в конструкторе.
+Например, мы хотим задать нейросеть и указать у нее последовательно слои, которые мы хотим использовать.
+Для простоты будем считать, что бывает два вида слоев:
+\begin{enumerate}
+\item Линейный слой \verb"Linear".
+Он задает отображение $f\colon \mathbb R^n\to \mathbb R^m$ по правилу $f(x) = Ax + b$, где $A\in \MatrixDim{m}{n}$ и $b\in \mathbb R^m$.
+
+\item Нелинейный слой.
+В это семейство входит любое нелинейное отображение $f\colon \mathbb R^n \to \mathbb R^n$ без параметров.
+Обычно используется поэлементное применение какой-то функции $\varphi\colon \mathbb R\to \mathbb R$.
+\end{enumerate}
+Для задания линейного слоя нужно указать размеры входа и выхода (еще нужно задать как инициализировать параметры \verb"A" и \verb"b", но я не хочу про это говорить).
+Для не линейного слоя достаточно задать функцию $\varphi$ (я проигнорирую не поэлементные отображения).
+Теперь вопрос, а какой интерфейс должен быть у класса нейросети \verb"Net", чтобы можно было удобно создавать сетку из нескольких слоев?
+
+\paragraph{Конструкторы}
+
+Давайте зафиксируем конкретный пример из четырех слоев
+\[
+\mathbb R^n \stackrel{Ax + b}{\longrightarrow} \mathbb R^m \stackrel{\texttt{Sigmoid}}{\longrightarrow}\mathbb R^m \stackrel{Ax + b}{\longrightarrow}\mathbb R^k \stackrel{\texttt{ReLu}}{\longrightarrow}\mathbb R^k
+\]
+Здесь \verb"Sigmoid" и \verb"ReLu" -- названия конкретных функций $\mathbb R\to \mathbb R$ (их точные формулы не имеют значения), которые применяются поэлементно.
+Теперь как бы мы могли задавать в конструкторе подобную нейросеть?
+Давайте пройдемся по вариантам:
+\begin{enumerate}
+\item Передать в конструктор все слои друг за другом
+\begin{cppcode}
+class Net {
+public:
+  template<class... Layers>
+  Net(Layers&&... leyers);
+  ...
+};
+
+Net net(Linear(In{n}, Out{m}), Sigmoid(m), Linear(In{m}, Out{k}), ReLu(k));
+\end{cppcode}
+Такой конструктор обязан быть шаблонным, потому что у нас неизвестное число аргументов и они неизвестного типа.
+Все rvalue слои можно спокойно поглотить и переместить внутрь нейросети.
+Главный минус такого подхода в том, что нам надо передавать слои согласованного размера, то есть размер входа для следующего слоя является размером выхода для предыдущего.
+У нас же размеры дублируются при задании смежных слоев.
+
+\item Небольшая вариация на тему предыдущего конструктора -- передавать \verb"std::initializer_list<AnyLayer>".
+Здесь \verb"AnyLayer" -- стирающий тип, который умеет хранить любой слой нейросети (про стирающие типы можно глянуть в раздел~\ref{section::TypeErasure}).
+В этом случае
+\begin{cppcode}
+class Net {
+public:
+  Net(std::initializer_list<AnyLayer> layers);
+};
+
+Net net{Linear(In{n}, Out{m}), Sigmoid(m), Linear(In{m}, Out{k}), ReLu(k)};
+\end{cppcode}
+Этот подход избавляет нас от шаблонов.
+Однако, главная проблема \verb"std::initializer_list" в том, что он всегда константный.
+Из него нельзя сделать move данных.
+А это значит в таком случае в этом случае все rvalue аргументы будут копироваться, что плохо (линейные слои могут быть очень большими).
+К сожалению одноразовой альтернативы (чтобы можно было оттуда один раз своровать данные) для \verb"std::initializer_list" в языке нет.
+Потому такой подход обычно хорош только для легких объектов, которые все равно надо копировать.
+
+\item Оба подхода выше страдают от дублирования информации о размерах слоев.
+Если мы хотим избежать этого дублирования, то нам нельзя передавать слои в качестве аргументов.
+В этом случае можно было бы передавать информацию о следующем слое, который надо добавить.
+Это может выглядеть как-то так
+\begin{cppcode}
+Net net(n, Tag::Linear, m, Tag::Sigmoid, Tag::Linear, k, Tag::ReLu);
+\end{cppcode}
+Такой подход плох тем, что надо еще умудриться написать такой конструктор.
+Так же нам понадобиться добавлять теги для новых видов слоев.
+Но хуже всего, теперь конструктор \verb"Net" будет намного сложнее, он должен будет сам дергать конструкторы своих слоев.
+\end{enumerate}
+Я думаю, что можно придумать еще кучу способов, в которых один будет другого чем-то лучше, а чем-то хуже.
+В любом случае все эти способы будут сильно страдать, если нам надо создать нейросеть с $10$ или $100$ слоями.
+Это будет длиннющая вереница из аргументов конструктора.
+
+\paragraph{Конструирование по частям}
+
+Вместо того, чтобы сразу строить нейросеть за один прием, можно попытаться строить ее инкрементально добавляя новые слои друг за другом.
+Наивная идея -- добавить в класс \verb"Net" методы для добавления слоя.
+И тут мы встретим первую особенность -- вставка первого слоя отличается от вставки не первого слоя.
+Действительно у первого слоя надо указать размер входа, а у всех остальных слоев размер входа -- это размер предыдущего слоя.
+\begin{cppcode}
+class Net {
+public:
+  Net& add1Linear(In, Out);
+  Net& addLinear(Out);
+  Net& add1Nonlinear(In, Tag);
+  Net& addNonlinear(Tag);
+private:
+  std::vector<AnyLayer> layers_;
+};
+\end{cppcode}
+Тогда использование будет выглядеть так
+\begin{cppcode}
+Net net;
+net.add1Linear(In{n}, Out{m})
+   .addNonlinear(Tag::Sigmoid)
+   .addLinear(Out{k})
+   .addNonlinear(Tag::ReLu);
+\end{cppcode}
+В этом подходе мне не нравится наличие двух методов для добавления слоя, потому что никто не мешает позвать \verb"add1Linear" или \verb"add1Nonlinear" не первым вызовом.
+Но еще хуже, если мы позовем \verb"addLinear" или \verb"addNonliner" первым вызовом, то программа упадет, попытаясь достучаться к пустому \verb"std::vector" внутри \verb"net".
+Если же убрать методы для первого слоя и оставить по одному методу для добавления следующего слоя, то у нас должен быть метод для инициализации размера входа.
+\begin{cppcode}
+class Net {
+public:
+  Net& setInput(In);
+  Net& addLinear(Out);
+  Net& addNonlinear(Tag);
+private:
+  size_t input_; // holds size of the first input
+  std::vector<AnyLayer> layers_;
+};
+
+Net net;
+net.setInput(In{n})
+   .addLinear(Out{m})
+   .addNonliner(Tag::Sigmoid)
+   .addLinera(Out{k})
+   .addNonlinear(Tag::ReLu);
+\end{cppcode}
+Давайте перечислим проблемы этого подхода:
+\begin{enumerate}
+\item В таком подходе приходится хранить вспомогательный начальный размер внутри нейросети, а эта информация нужна только во время конструирования нейросети.
+В дальнейшем -- это просто размер входа в начальном слое.
+
+\item Методы по конструированию нейросети не будут использоваться после ее создания.
+А значит они будут просто засорять пользовательский интерфейс нейросети (возможно вы хотите иметь такие методы в публичном интерфейсе, а возможно нет, сейчас я обращаю внимание на ситуацию, когда мы не хотим лишние методы).
+Сделать методы приватными и использовать их через специальный интерфейс доступа (см.~раздел~\ref{section::SafeUnsafe}) -- не лучший вариант, так как вы все равно помещаете в класс методы, которых там быть не должно.
+
+\item Еще одной большой проблемой будет -- при таком инкрементальном построении строящийся объект может не находиться в корректном состоянии.
+В случае нейросети такой проблемы нет, но гипотетически для более сложных объектов, так может получиться, что только по завершению построения все инварианты будут соблюдены.
+Например будет посчитан какой-то кэш, который должен знать весь класс целиком, а не его промежуточное состояние.
+\end{enumerate}
+Таким образом, при конструировании нейросети у нас появляется некоторый контекст, который мы хотим хранить только во время ее конструирования.
+И хранить мы его хотим длительно.
+А это означает, что нам нужен отдельный класс для создания этого контекста.
+Это будет вспомогательный класс, который умеет по частям строить нейросеть и хранит все вспомогательные данные в себе.
+
+\paragraph{Builder}
+
+Давайте заведем специальный класс, который будет уметь конструировать нейросеть.
+Он должен уметь строить нейросеть по частям, храня всю вспомогательную информацию, и умеет возвращать нейросеть в корректном состоянии в конце.
+\begin{cppcode}
+class Builder;
+
+class Net {
+  friend class Builder; // is needed to access the following constructor
+  Net(std::vector<AnyLayer>&&); // for Builder only
+public:
+  // public interface
+private:
+  ...
+};
+
+class Builder {
+public:
+  Builder& setInput(In{n}) {
+    input_ = n;
+  }
+  Builder& addLinear(Out{m}) {
+    assert(previous != 0);
+    layers_.push_back(Linear(In{previous_}, Out{m}));
+    previous_ = m;
+  }
+  Builder& addNonlinear(Tag tag) {
+    assert(previous != 0);
+    layers_.push_back(Nonlinear(tag, previous_));
+  }
+  Net extract() {
+    assert(!layers_.empty());
+    previous_ = 0;
+    return Net(std::move(layers_));
+  }
+private:
+  size_t previous_;
+  std::vector<AnyLayer> layers_;
+};
+\end{cppcode}
+Тогда использование этого класса выглядит так:
+\begin{cppcode}
+Builder b;
+b.setInput(In{n})
+ .addLinear(Out{m})
+ .addNonlinear(Tag::Sigmoid)
+ .addLinear(Out{k})
+ .addNonlinear(Tag::ReLu);
+Net net = b.extract();
+\end{cppcode}
+Еще как вариант можно в \verb"Builder" хранить саму нейросеть и работать с ее внутренностями напрямую.
+Тогда нужно уметь ее мувать наружу следующим образом:
+\begin{cppcode}
+class Builder {
+public:
+  ...
+  Net&& extract() {
+    return std::move(net_); // a rare case of std::move after return
+  }
+private:
+  size_t previous_;
+  Net net_;
+};
+\end{cppcode}
+Обратите внимание, как изменится метод \verb"extract".
+Теперь под \verb"return" у нас стоит \verb"std::move".
+Это нужно, чтобы избежать копирования \verb"net_" при вынимании из \verb"Builder"-а.
+В данном случае без \verb"std::move" оно даже не скомпилируется, потому что \verb"net_" является lvalue и его нельзя вернуть по rvalue ссылке.
+Можно было бы написать
+\begin{cppcode}
+class Builder {
+public:
+  ...
+  Net extract() {
+    return std::move(net_); // a rare case of std::move after return
+  }
+private:
+  size_t previous_;
+  Net net_;
+};
+\end{cppcode}
+Технически это работает так же, только теперь компилятор позволит вам не писать \verb"std::move" и вы можете забыть об этом и в этом месте будете все время делать дорогую копию.
+
+\paragraph{Разделение интерфейса Builder}
+
+Обратите внимание, что в интерфейсе \verb"Builder" метод \verb"setInput" применяется только при первом вызове, а потом он применяться не должен.
+И наоборот, методы \verb"addLinear" и \verb"AddNonlinear" только после вызова \verb"setInput".
+Чтобы гарантировать это статически, можно сделать следующий трюк с прокси объектами.%
+\footnote{Обратите внимание, что я храню ссылки на переменные в классе.
+Обычно хранить ссылки на переменные в классе -- плохая практика.
+Однако, в данном случае класс \texttt{LayerAdder} является вспомогательным классом, который будет жить только во время вызова методом \texttt{Builder}.
+А потому использование в нем ссылок на поля \texttt{Builder} -- безопасно.
+Для этого надо лишь гарантировать, что только \texttt{Builder} умеет создавать \texttt{LayerAdder}.
+Для этого единственный конструктор сделан приватным.}
+\begin{cppcode}
+class Builder;
+
+class LayerAdder {
+  friend class Builder; // is needed to access the following constructor
+  LayerAdder(size_t& previous, std::vector<AnyLayers>& layers); // for builder only
+public:
+  LayerAdder& addLinear(Out{m});
+  LayerAdder& addNonlinear(Tag);
+private:
+  size_t& previous_;
+  std::vector<AnyLayers>& layers_;
+};
+
+class Builder {
+public:
+  LayerAdder setInput(In{n}) {
+    previous_ = n;
+    return LayerAdder(previous_, layers_);
+  }
+  Net extract();
+private:
+  size_t previous_;
+  std::vector<AnyLayer> layers_;
+};
+\end{cppcode}
+Тогда старый код сработает так же:
+\begin{cppcode}
+Builder b;
+b.setInput(In{n})
+ .addLinear(Out{m})
+ .addNonlinear(Tag::Sigmoid)
+ .addLinear(Out{k})
+ .addNonlinear(Tag::ReLu);
+Net net = b.extract();
+\end{cppcode}
+Однако, следующее уже не сработает
+\begin{cppcode}
+Builder b;
+b.addLinear(Out{m}); // compilation error there is no method addLinear in Builder
+b.setInput(In{n}).setInput(In{m}); // compilation error there is not method setInput in LayerAdder
+\end{cppcode}
+Однако, все еще есть проблемы такого характера:
+\begin{cppcode}
+Builder b;
+b.setInput(In{n})
+ .addLinear(Out{m})
+ .addNonlinear(Tag::Sigmoid)
+ .addLinear(Out{k})
+ .addNonlinear(Tag::ReLu);
+b.setInput(In{n});
+\end{cppcode}
+Какое поведение мы ожидаем в строчке~$7$?
+Мы хотим сбросить всю архитектуру нейросети и начать заново?
+Мы хотим игнорировать этот вызов?
+В любом случае это надо обдумать.
+Так же в таком интерфейсе нет возможности продолжить добавлять слои.
+Можно было бы поправить с помощью метода \verb"proceed", который возвращает \verb"LayerAdder".
+Однако, с ним такие же проблемы, что его нельзя вызывать первым до \verb"setInput".
+Технически можно сделать следующим образом продолжение
+\begin{cppcode}
+Builder b;
+auto proceed = b.setInput(In{n})
+                .addLinear(Out{m})
+                .addNonlinear(Tag::Sigmoid);
+proceed.addLinear(Out{k})
+       .addNonlinear(Tag::ReLu);
+Net net = b.extract();
+\end{cppcode}
+Не уверен, что это красивый синтаксис.
+Но по сути мы хотим State Machine во время компиляции.
+И за состояние этой машины отвечает тип возвращаемой переменной \verb"proceed".
+А потому для запоминания этого состояния, нужно его возвращать.
+
+Причина, почему я заговорил про State Machine -- у нас как бы есть два билдера: который еще не начал работу и который продолжает работу.
+И так как у нас всего два состояния: начальное и все остальные, то начальное можно обслужить в конструкторе \verb"Builder"-а, а сам builder по сути является лишь \verb"LayerAdder"-ом.
+\begin{cppcode}
+class Builder {
+public:
+  Builder(In in) : previous_(in) {}
+  Builder& addLinear(Out{m});
+  Builder& addNonlinear(Tag);
+  Net extract();
+private:
+  size_t& previous_;
+  std::vector<AnyLayers>& layers_;
+};
+\end{cppcode}
+Или же через Named Constructor Idiom (раздел~\ref{section::NamedCtorIdiom})
+\begin{cppcode}
+class Builder {
+  Builder(In in) : previous_(in) {}
+public:
+  Builder& addLinear(Out{m});
+  Builder& addNonlinear(Tag);
+  Net extract();
+  
+  static Builder setInput(In in) {
+    return Builder(in);
+  }
+private:
+  size_t& previous_;
+  std::vector<AnyLayers>& layers_;
+};
+\end{cppcode}
+И использовать так:
+\begin{cppcode}
+Builder b = Builder::setInput(In{n});
+b.addLinear(Out{m})
+ .addNonlinear(Tag::Sigmoid)
+ .addLinear(Out{k})
+ .addNonlinear(Tag::ReLu);
+Net net = b.extract();
+\end{cppcode}
 
 \subsubsection{Приведение типов и ADL}
 
@@ -2059,6 +2407,7 @@ A<U> operator+(const A<U>&, const A<U>&) {
 А это не очень хорошо, не стоит так делать.
 
 \subsubsection{Контроль доступа Safe/Unsafe}
+\label{section::SafeUnsafe}
 
 Очень часто бывает так, что в интерфейсе вашего класса есть опасные и безопасные операции.
 Что это значит?
