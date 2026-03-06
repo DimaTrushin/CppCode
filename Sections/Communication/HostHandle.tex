@@ -1339,7 +1339,7 @@ Handle<Interface2> h2 = a.handle<Interface2>();
 template<class T>
 class Host {
 protected:
-  Host() = default;
+  Host();
   Host(const Host&) = delete;
   Host(Host&&) noexcept;
   Host& operator=(const Host&) = delete;
@@ -1355,7 +1355,7 @@ public:
   T& ref();
   const T& ref() const;
 private:
-  shared_ptr<T*> host_address_;
+  std::shared_ptr<T*> host_address_;
 };
 \end{cppcode}
 Давайте обратим внимание на некоторые особенности класса.
@@ -1371,73 +1371,19 @@ private:
 Методы получения указателя и ссылки на отслеживаемый объект.
 И еще метод для отсоединения всех.
 
+\paragraph{Имплементация методов \texttt{Host}}
+
 Теперь пройдемся по имплементации методов.
-Из стандартных методов мы удаляем операции копирования, операции перемещения надо имплементировать, а остальные дефолтные.
-Перемещающий конструктор будет выглядеть так.
-\begin{cppcode}
-  Host(Host&& other) noexcept 
-  : host_address_(std::move(other.host_address_)) {
-    if (host_address_)
-      *host_address_ = static_cast<T*>(this);
-  } 
-\end{cppcode}
-То есть мы перемещаем единственное поле \verb"host_address_" и так как у нас ленивая инициализация, то мы записываем туда новый адрес только если адрес был инициализирован.
-
-Теперь идет присваивающее перемещение.
-\begin{cppcode}
-Host& operator=(Host&& other) noexcept {
-  *host_address_ = std::move(other.host_address_);
-  if (host_address_)
-    *host_address_ = static_cast<T*>(this);
-  return *this;
-}
-\end{cppcode}
-То есть мы выполняем дефолтный мув и только если адрес хоста был инициализирован, то мы его перезаписываем.
-
-Теперь имплементация метода выдачи ручек.
+Из стандартных методов мы удаляем операции копирования, оставляем дефолтный деструктора, а остальные надо имплементировать.
 Вначале нам понадобится вспомогательный метод:
 \begin{cppcode}
-static shared_ptr<T*> sharedOn(Host& host) {
-  return make_shared(static_cast<T*>(&host)); } // Downcast
-};
-static shared_ptr<T*> sharedOn(const Host& host) {
-  return make_shared(static_cast<T*>(&const_cast<Host&>(host))); } // Downcast
-};
+std::shared_ptr<T*> sharedOnMe() {
+  return std::make_shared<T*>(ptr()); } // Downcast
 \end{cppcode}
 Этот приватный метод позволяет получить \verb"shared_ptr" с адресом на текущий объект, который мы отслеживаем.
 Для этого приходится делать каст базового класса, то есть нашего класса \verb"Host<T>", к наследнику, которым является \verb"T".
-Обратите внимание на имплементацию второго метода.
-Он нужен чтобы в константных методах избавиться от константности адреса \verb"this".
-Если бы мы инициализировали \verb"shared_ptr" в конструкторе всегда, то этой имплементации не понадобилось бы, потому что внутри конструктора объект никогда не константный.
-Однако, ленивая инициализация требует от нас возможности получения адреса на неконстантный объект даже в константных методах.
-Это означает, что при разработке такого класса надо быть аккуратным и убедиться, что вы не получаете UB.
-Но как только вы в этом убедились, то все безопасно.
-Тогда выдача ручек имплементируется так
-\begin{cppcode}
-Handle handle() {
-  if (!host_address_)
-    host_address_ = make_shared(*this);
-  return Handle(host_address_);
-}
-ConstHandle handle() const {
-  if (!host_address_)
-    host_address_ = make_shared(*this);
-  return ConstHandle(host_address_);
-}
-ConstHandle chandle() const {
-  if (!host_address_)
-    host_address_ = make_shared(*this);
-  return ConstHandle(host_address_);
-}
-\end{cppcode}
-Уже конструктор handle преобразует \verb"shared_ptr" в \verb"weak_ptr".
-Метод отсоединения всех ручек имплементируется так.
-\begin{cppcode}
-void detach() {
-  host_address_.reset();
-}
-\end{cppcode}
-Методы доступа к адресу объекта
+
+Методы доступа к адресу объекта выглядят так:
 \begin{cppcode}
   T* ptr() {
     return static_cast<T*>(this);
@@ -1455,6 +1401,125 @@ void detach() {
 Из-за ленивой инициализации мы не обязаны хранить адрес внутри \verb"host_address_".
 И запрос данных из него требует прыжка по памяти.
 Явный каст получается лучше и удобнее.
+
+Теперь дефолтный конструктор
+\begin{cppcode}
+  Host() : host_address_(sharedOnMe());
+\end{cppcode}
+Перемещающий конструктор будет выглядеть так.
+\begin{cppcode}
+  Host(Host&& other) noexcept 
+  : host_address_(std::move(other.host_address_)) {
+    if (host_address_)
+      *host_address_ = ptr();
+  } 
+\end{cppcode}
+То есть мы перемещаем единственное поле \verb"host_address_" и так как у нас ленивая инициализация, то мы записываем туда новый адрес только если адрес был инициализирован.
+
+Теперь идет присваивающее перемещение.
+\begin{cppcode}
+Host& operator=(Host&& other) noexcept {
+  host_address_ = std::move(other.host_address_);
+  if (host_address_)
+    *host_address_ = ptr();
+  return *this;
+}
+\end{cppcode}
+То есть мы выполняем дефолтный мув и только если адрес хоста был инициализирован, то мы его перезаписываем.
+
+Теперь методы выдачи ручек имплементируется так
+\begin{cppcode}
+Handle handle() {
+  if (!host_address_)
+    host_address_ = sharedOnMe();
+  return Handle(host_address_);
+}
+ConstHandle handle() const {
+  assert(host_address_);
+  return ConstHandle(host_address_);
+}
+ConstHandle chandle() const {
+  assert(host_address_);
+  return ConstHandle(host_address_);
+}
+\end{cppcode}
+Обратите внимание, что неконстантный метод \verb"handle" проверяет инициализирован ли \verb"host_address_" и если нет, то инициализируем его своим адресом.
+Только после этого можно выдать ручку.
+Однако, в случае константной ручки, мы не можем менять состояние полей класса.
+А именно, мы не можем изменить \verb"host_address_".
+Прежде всего отметим, что не инициализированный объект может возникнуть только после move-а из него.
+А потому это проблема возникает, когда мы по константной ссылке обратились к объекту, из которого произошел move.
+Логически в этом случае не ясно на сколько вообще хорошо поддерживать операцию выдачи ручки.
+В нашей текущей реализации будет возвращаться пустая ручка, которая ни на кого не ссылается.
+
+Метод отсоединения всех ручек имплементируется так.
+\begin{cppcode}
+void detach() {
+  host_address_.reset();
+}
+\end{cppcode}
+
+
+\paragraph{Что делать с деинициализированным \texttt{Host}}
+
+Если очень хочется иметь возможность возвращать ручки из хоста, из которого данные были мувныту куда-то, то тут можно принять несколько решений:
+\begin{enumerate}
+\item Можно всегда инициализировать \verb"host_address_" во всех конструкторах и операторах присваивания.
+Главный недостаток будет в том, что на каждый move будет одна аллокация.
+Что не очень хорошо.
+\begin{cppcode}
+  Host(Host&& other) noexcept 
+  : host_address_(std::exchange(other.host_address_, other.sharedOnMe())) {
+    *host_address_ = ptr(); // host_address_ is always allocated
+  } 
+\end{cppcode}
+В этом случае нам не надо проверять аллоцирован ли \verb"host_address_", так как инвариант класса -- этот \verb"shared_ptr" всегда аллоцирован.
+И аналогично
+\begin{cppcode}
+Host& operator=(Host&& other) noexcept {
+  host_address_ = std::exchange(other.host_address_, other.sharedOnMe());
+  *host_address_ = ptr();
+  return *this;
+}
+\end{cppcode}
+
+\item Можно поле \verb"host_address_" пометить как \verb"mutable".%
+\footnote{Ура, мы придумали полезное(?) применение \texttt{mutable}!}
+Это позволит относиться к базовому классу как к кэшу.
+Мне не очень импонирует это решение, но видимо это неизбежность.
+В этом случае еще понадобится вот такая вспомогательная функция%
+\footnote{Ура, мы нашли полезное(?) применение \texttt{const\_cast}-у!}
+\begin{cppcode}
+std::shared_ptr<T*> sharedOnMe() const {
+  return std::make_shared<T*>(static_cast<T*>(ptr())); } // Downcast
+\end{cppcode}
+и тогда
+\begin{cppcode}
+template<class T>
+class Host {
+public:
+  ...
+  ConstHandle handle() const{
+    if (!host_address_)
+      host_address_ = sharedOnMe();  // converts const Host* to T*
+    return ConstHandle(host_address_);
+  }
+  ...
+private:
+  mutable std::shared_ptr<T*> host_addres_;
+};
+\end{cppcode}
+Вспомогательная функция нужна, чтобы сделать опасную операцию конвертации константного адреса хоста, на не константный адрес производного класса \verb"T".
+Обратите внимание на имплементацию метода \verb"sharedOnMe".
+Он нужен чтобы в константных методах избавиться от константности адреса \verb"this".
+Если бы мы инициализировали \verb"shared_ptr" в конструкторе всегда, то этой имплементации не понадобилось бы, потому что внутри конструктора объект никогда не константный.
+Однако, ленивая инициализация требует от нас возможности получения адреса на неконстантный объект даже в константных методах.
+Это означает, что при разработке такого класса надо быть аккуратным и убедиться, что вы не получаете UB.
+Но как только вы в этом убедились, то все безопасно.
+
+\item Уловка с \verb"unique_ptr" для кэша (смотри раздел~\ref{section::fragile} пункт~\ref{section::fragile::nocopymove}) тут не сработает, потому что \verb"unique_ptr" надо так же аллоцировать при каждом муве, что делает это бесполезным.
+По сути вся проблема возникает в том, что делать с объектом, из которого сделан move.
+\end{enumerate}
 
 \paragraph{Опасная деталь}
 
@@ -1508,7 +1573,7 @@ private:
 Следующие операции проверяют, что \verb"Handle" действительно ссылается на живой объект.
 \begin{cppcode}
 operator bool() const {
-  return !host_address_.expired();
+  return !host_address_.expired() && ptr() != nullptr;
 }
 bool operator==(nullptr_t) const {
   return !(*this);
@@ -1531,7 +1596,7 @@ Handle& operator=(nullptr_t) {
 \begin{cppcode}
 T* ptr() const {
   shared_ptr<T*> host_address = host_address_.lock();
-  if (!host_address)
+  if (host_address)
     return *host_address;
   return nullptr;
 }
@@ -1549,6 +1614,8 @@ T* operator->() const {
 Так же несмотря на то что \verb"Handle"  ссылается на неконстантные данные, все методы доступа у него снабжены \verb"const" квалификатором.
 Это связано с тем, что \verb"const" не пробрасывается сквозь указатели.
 А \verb"Handle" у нас просто умная версия указателя.
+
+\paragraph{\texttt{ConstHandle}}
 
 Версия \verb"ConstHandle" пишется абсолютно аналогично с двумя маленькими отличиями.
 Первое отличие -- методы доступа возвращают константные ссылки и указатели.
@@ -1598,9 +1665,10 @@ const T* operator->() const {
 \end{cppcode}
 И два конструктора от \verb"Handle".
 \begin{cppcode}
-ConstHandle(const Handle& other) : host_address_(other.host_address_) {
+ConstHandle(const Handle& other) : ConstHandle(other.host_address_) {
 }
-ConstHandle(Handle&& other) noexcept : host_address_(std::move(other.host_address_)) {
+ConstHandle(Handle&& other) noexcept : ConstHandle(std::move(other.host_address_)) {
 }
 \end{cppcode}
 Эти конструкции работают потому что и \verb"Handle" и \verb"ConstHandle" хранят внутри себя адрес в виде \verb"T*".
+Для того, чтобы \verb"ConstHandle" мог получить доступ к приватному полю \verb"host_address_" внутри \verb"Handle", нужно так же объявить другом класс \verb"ConstHandle" внутри класса \verb"Handle".
