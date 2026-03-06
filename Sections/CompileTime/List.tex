@@ -3,11 +3,1250 @@
 
 \subsection{Контейнеры}
 
-\subsubsection{Список типов}
+Мы уже выше пользовались контейнером типов и элементов.
+Давайте я все же явно проговорю, что это такое.
+До появления variadic templates в языке не было способа из коробки хранить списки типов и элементов и их надо было моделировать.
+Однако, с появлением variadic templates список типов это просто любой шаблон с произвольным количеством аргументов, которые являются типами.
+Вот примеры
+\begin{cppcode}
+template<class...>
+struct List {};
+
+template<class...>
+struct MyList {};
+
+using List1 = List<int, double>;
+using List2 = List<int, MyList<int, double>, List1>;
+\end{cppcode}
+Списки элементов разного типа делаются с помощью ключевого слова \verb"auto" так:
+\begin{cppcode}
+template<auto...>
+struct List {};
+
+template<auto...>
+struct MyList {};
+
+void func(int) {}
+
+using List1 = List<1, 2, 'c', func>;
+using List2 = MyList<1, 2, func>;
+\end{cppcode}
+Так же можно делать списки с элементами одинакового типа.
+Делать специально такой тип имеет смысл только, если вы хотите имплементировать проверку, что элементы действительно являются элементами нужного типа.
+В этом случае вам придется запомнить тип:
+\begin{cppcode}
+template<class T, T...>
+struct List {};
+
+using List1 = List<int, 1, 2>;
+using List2 = List<char, '1', 'c'>;
+\end{cppcode}
+Я для различения списков типов и объектов предпочитаю использовать \verb"List" для типов и \verb"Seq" для элементов.
+
+\subsubsection{Список типов и операции}
+
+Мы легко можем создавать разные списки, наполненные элементами.
+Так же мы можем сохранять списки в переменных с помощью директивы \verb"using".
+\begin{cppcode}
+template<class...>
+struct List1 {};
+
+using MyList = List1<int, double, char>;
+\end{cppcode}
+Но теперь хотелось бы иметь в запасе некоторый набор операций со списками, для которого мы хотим иметь удобный синтаксис.
+Давайте перечислим эти операции:
+\begin{enumerate}
+\item Является ли класс списком типов.
+К спискам будем относить любой тип вида
+\begin{cppcode}
+template<class...>
+class SomeClass {};
+
+SomeClass<int, double, A, std::vector<B>>; // is a type list
+int;                                       // is not a type list
+std::vector<int>;                          // is a type list
+\end{cppcode}
+То есть списком будет являться тип наполненный элементами, а не сам шаблон.
+Нам нужна возможность делать такую проверку, чтобы лучше сообщать пользователю об ошибках.
+Использование должно выглядеть так:
+\begin{cppcode}
+isTypeList<List<int, double, A, B>>; // true
+isTypeList<int>;                     // false
+isTypeList<std::vector<int>>;        // true
+\end{cppcode}
+
+\item Проверка типов списков.
+А именно, мы можем создать несколько шаблонов для задания списков
+\begin{cppcode}
+template<class...>
+struct List1 {};
+template<class...>
+struct List2 {};
+
+using MyList1 = List1<int, double>;
+using MyList2 = List2<int, double>;
+using MyList3 = List2<int, double, char>;
+\end{cppcode}
+Тут типы списков отличаются, у первого он \verb"List1", а у второго \verb"List2".
+Так как мы можем задавать разные виды списков и не фиксируем один специальный, то хотелось бы уметь проверять их на равенство.
+\begin{cppcode}
+areSame2<MyList1, MyList2>;         // false
+areSame<MyList1, MyList2>;          // false
+areSame<MyList2, MyList3>;          // true
+areSame<MyList1, MyList2, MyList3>; // false
+\end{cppcode}
+
+\item Конвертация между разными типами.
+Так как мы поддерживаем много разных типов списков, то нужно уметь конвертировать один в другой:
+\begin{cppcode}
+template<class...>
+struct List1 {};
+
+template<class...>
+struct List2 {};
+
+using MyList = ConvertTo<List1<int, double>, List2>;
+// MyList is List2<int, double>
+\end{cppcode}
+
+\item Добавление элементов в конец списка.
+\begin{cppcode}
+template<class...>
+struct List {};
+
+using List1 = List<int, double>;
+
+using List2 = Append<List1, char, double>; // or PushBack
+// List2 is List<int, double, char, double>
+\end{cppcode}
+
+\item Добавление элементов в начало списка.
+\begin{cppcode}
+template<class...>
+struct List {};
+
+using List1 = List<int, double>;
+
+using List2 = Prepend<char, double, List1>; // or PushFront
+// List2 is List<char, double, int, double>
+\end{cppcode}
+
+\item Разворачивание списка задом наперед.
+\begin{cppcode}
+template<class...>
+struct List {};
+
+using List1 = List<int, double, char>;
+
+using List2 = Reverse<List1>;
+// List2 is List<char, double, int>
+\end{cppcode}
+
+\item Доступ к элементу в начале и в конце
+\begin{cppcode}
+template<class...>
+struct List {};
+
+using List1 = List<int, double, char>;
+
+using Type1 = Front<List1>;
+// Type1 is int
+using Type2 = Back<List1>;
+// Type2 is char
+\end{cppcode}
+
+\item Удаление элементов в конце и в начале
+\begin{cppcode}
+template<class...>
+struct List {};
+
+using List1 = List<int, double, char>;
+
+using List2 = PopFront<List1>;
+// List2 is List<double, char>
+using List3 = PopFront<List1, 2>;
+// List3 is List<char>
+using List4 = PopBack<List1, 2>;
+// List4 is List<int>;
+using List5 = PopBack<List1, 4>;
+// List5 is List<>;
+\end{cppcode}
+
+\item Слияние двух и более списков.
+Приклеивание списков друг за другом:
+\begin{cppcode}
+template<class...>
+struct List {};
+
+using List1 = List<int, double>;
+using List2 = List<char, double>;
+using List3 = List<short, double>;
+using List4 = Merge<List1, List2, List3>;
+
+// List4 is List<int, double, char, double, short, double>;
+\end{cppcode}
+
+\item Запрос размера списка.
+\begin{cppcode}
+template<class...>
+struct List {};
+
+using List1 = List<int, double>;
+
+Size<List1>; // equals 2
+\end{cppcode}
+
+\item Проверка на пустоту списка.
+\begin{cppcode}
+template<class...>
+struct List {};
+
+using List1 = List<int, double>;
+using List2 = List<>;
+
+isEmpty<List1>; // false
+isEmpty<List2>; // true
+\end{cppcode}
+
+\item Запросить тип на $i$-ой позиции в списке.
+\begin{cppcode}
+template<class...>
+struct List {};
+
+using List1 = List<int, double, char, short, const int&, const double*>;
+
+using Type = At<List1, 4>;
+// Type is const int&
+\end{cppcode}
+
+\item Запросить индекс типа в списке (либо индекс первого вхождения, либо список индексов для всех вхождений).
+\begin{cppcode}
+template<class...>
+struct List {};
+
+using List1 = List<int, double, char, double, short, double, const int&, const double*>;
+
+IndexOf1<List1, double>; // equals 1
+IndicesOf<List1, double>; // equals Seq<1, 3, 5>
+\end{cppcode}
+Во втором методе можно дополнительно сообщить тип контейнера, в который надо положить список элементов:
+\begin{cppcode}
+IndicesOf<List1, double, ListE>; // equals ListE<1, 3, 5>
+\end{cppcode}
+
+\item Проверка содержит ли список элемент.
+\begin{cppcode}
+template<class...>
+struct List {};
+
+using List1 = List<int, double, char, double, short, double, const int&, const double*>;
+
+Contains<List1, double>; // true
+Contains<List1, const double>; // false
+\end{cppcode}
+
+\item Стереть элемент из списка (либо первое вхождение, либо все вхождения).
+\begin{cppcode}
+template<class...>
+struct List {};
+
+using List1 = List<int, double, char, double, short, double, const int&, const double*>;
+
+using List2 = Erase1<List1, double>;
+// List2 is List<int, char, double, short, double, const int&, const double*>;
+using List3 = EraseAll<List1, double>;
+// List3 is List<int, char, short, const int&, const double*>;
+\end{cppcode}
+
+
+\item Избавиться от повторений в списке.
+\begin{cppcode}
+template<class...>
+struct List {};
+
+using List1 = List<int, double, char, double, short, double, const int&, const double*>;
+
+using List2 = NoDuplicates<List1>;
+// List2 is List<int, double, char, short, const int&, const double*>;
+\end{cppcode}
+
+\item Заменить один элемент на другой (либо первое вхождение, либо все вхождения).
+\begin{cppcode}
+template<class...>
+struct List {};
+
+using List1 = List<int, double, char, double, short, double, const int&, const double*>;
+
+using List2 = Replace1<List1, double, double*>;
+// List2 is List<int, double*, char, double, short, double, const int&, const double*>;
+using List3 = ReplaceAll<List1, double, double*>;
+// List3 is List<int, double*, char, double*, short, double*, const int&, const double*>;
+\end{cppcode}
+
+\item Применить процедуру ко всем элементам списка (MAP).
+В этом случае, мы считаем, что процедура -- это шаблон вида
+\begin{cppcode}
+template<class Arg>
+using Apply = SomethingDependingOn<Arg>;
+\end{cppcode}
+Тогда использование MAP выглядит так:
+\begin{cppcode}
+template<class...>
+struct List {};
+
+using List1 = List<int, double, char, double>;
+
+template<class T>
+using Vectorize = std::vector<T>;
+
+using List2 = Map<List1, Vectorize>;
+//List2 is List<std::vector<int>, std::vector<double>, std::vector<char>, std::vector<double>>
+\end{cppcode}
+
+\item Операции \verb"foldl" и \verb"foldl".
+Данные операции выполняют бинарную операцию ко всем элементам списка.
+Например, объединение большого числа списков, имея операцию только объединения двух, можно сделать так
+\begin{cppcode}
+template<class...>
+struct List {};
+
+using List1 = List<int>;
+using List2 = List<double>;
+using List3 = List<char>;
+
+using BigList = List<List1, List2, List3>;
+
+using List4 = Foldl<Merge2, List<>, BigList>;
+// List4 is List<int, double, char>
+\end{cppcode}
+Здесь \verb"List<>" выступает в качестве начального элемента.
+Математически \verb"foldl" и \verb"foldr" отличаются расстановкой скобок.
+На примере объединения множеств $U_1,\ldots, U_k$ с начальным множеством $U_0$, это выглядит так:
+\[
+\begin{aligned}
+\operatorname{foldl}(\cup, U_0, \{U_1,\ldots, U_k\}) &=(\ldots ((U_0 \cup U_1)\cup U_2) \ldots U_{k-1}) \cup U_k)\\
+\operatorname{foldr}(\cup, \{U_1,\ldots, U_k\}, U_0) &=
+(U_1 \cup (U_2 \ldots (U_{k-1}\cup (U_k \cup U_0))\ldots)
+\end{aligned}
+\]
+Есть разновидность \verb"foldl0" и \verb"foldr0", которым не нужен начальный элемент, но они предполагают, что список аргументов содержит хотя бы один элемент.
+
+\item Операция \verb"zip" для двух списков, возвращающая список из пар.
+Тут есть проблема, какой список использовать для пар.
+И разрешать ли в качестве аргументов разные типы списков.
+Давайте для простоты предположу, что списки съедаются одного типа.
+Кроме того, можно эту операцию продолжить на случай более чем двух аргументов.
+Тогда \verb"zip" должен возвращать список из кортежей длины равной количеству списков в аргументах.
+Как это должно работать:
+\begin{cppcode}
+template<class...>
+struct List {};
+
+using List1 = List<int, double>;
+using List2 = List<char, short, int>;
+using List3 = List<float, const int&>;
+
+using List4 = Zip<List1, List2>;
+// List4 is List<List<int, char>, List<double, short>>;
+using List5 = Zip<List1, List2, List3>;
+// List5 = List<List<int, char, float>, List<double, short, const int&>>;
+\end{cppcode}
+
+\item Отобрать элементы удовлетворяющие условию.
+В этом случае предикатом выступает шаблон вида
+\begin{cppcode}
+template<class Arg>
+struct PredicateT {
+  static constexpr bool value = /*some logical expression*/;
+};
+\end{cppcode}
+Тогда фильтрация будет выглядеть так
+\begin{cppcode}
+template<class Arg>
+struct isStdVectorT : std::false_type {};
+template<class Arg, class Alloc>
+struct isStdVectorT<std::vector<Arg, Alloc>> : std::true_type {};
+
+using List1 = List<int, std::vector<double>, char, std::vector<short, MyAllocator<short>>>;
+
+using List2 = Filter<List1, isStdVectorT>;
+//List2 is  List<std::vector<double>, std::vector<short, MyAllocator<short>>>
+\end{cppcode}
+
+\item Составить список всех подмножеств данного списка.
+\begin{cppcode}
+template<class...>
+struct List {};
+
+using List1 = List<int, double>;
+
+using List2 = PowerSet<List1>;
+// List2 is List<List<>, List<double>, List<int>, List<int, double>>;
+\end{cppcode}
+
+
+\item Составить список всех пар элементов данного списка.
+\begin{cppcode}
+template<class...>
+struct List {};
+
+using List1 = List<int, double>;
+
+using List2 = PairSet<List1>;
+// List2 is List<List<int, int>, List<int, double>, List<double, int>, List<double, double>>;
+\end{cppcode}
+
+\item Составить список всех упорядоченных пар элементов данного списка.
+\begin{cppcode}
+template<class...>
+struct List {};
+
+using List1 = List<int, double>;
+
+using List2 =SymPairSet<List1>;
+// List2 is List<List<int, int>, List<int, double>, List<double, double>>;
+\end{cppcode}
+\end{enumerate}
+
+\subsubsection{Имплементация некоторых из методов}
+
+\paragraph{Проверка на лист типов}
+
+Давайте начнем с простой имплементации, а именно с проверки является ли текущий тип списком типов или нет.
+Идея заключается в том, чтобы сделать общий тип для не контейнера и специализацию для контейнера.
+В первом случае мы сохраним значение \verb"false", а во втором, значение \verb"true".
+Руками это можно сделать так
+\begin{cppcode}
+template<class T>
+struct isTypeListT {
+  static constexpr bool value = false;
+};
+
+template<template<class...> class List, class... Types>
+struct isTypeListT<List<Types...>> {
+  static constexpr bool value = true;
+};
+
+template<class T>
+constexpr bool isTypeList = isTypeListT<T>::value;
+\end{cppcode}
+Можно немного автоматизировать вычисление \verb"value" следующим образом:
+\begin{cppcode}
+template<class T>
+struct isTypeListT : std::false_type {
+};
+
+template<template<class...> class List, class... Types>
+struct isTypeListT<List<Types...>> : std::true_type {
+};
+
+template<class T>
+constexpr bool isTypeList = isTypeListT<T>::value;
+\end{cppcode}
+Никакой проверки на ошибки тут не надо.
+
+\paragraph{Элемент на $i$-ом месте}
+
+Это один из интересных методов, если мы хотим обрабатывать ошибки.
+Простая индуктивная имплементация:
+\begin{cppcode}
+template<class List, int Index>
+struct AtT {
+  using type = typename AtT<PopFront<List>, Index - 1>::type;
+};
+
+template<class List>
+struct AtT<List, 0> {
+  using type = Front<List>;
+};
+
+template<class List, int Index>
+using At = typename AtT<List, Index>::type;
+\end{cppcode}
+Во-первых мы видим, что очень неудобная рекурсия получается.
+Шаблон \verb"AtT" не видит \verb"At", а потому приходится писать длинное выражение с \verb"typename".
+Это можно решить так
+\begin{cppcode}
+template<class List, int Index>
+struct AtT;
+
+template<class List, int Index>
+using At = typename AtT<List, Index>::type;
+
+template<class List, int Index>
+struct AtT {
+  using type = At<PopFront<List>, Index - 1>;
+};
+
+template<class List>
+struct AtT<List, 0> {
+  using type = Front<List>;
+};
+\end{cppcode}
+Если у нас реализован \verb"PopFront" для произовольного количества элементов в начале списка, то можно упростить имплементацию еще сильнее:
+\begin{cppcode}
+template<class List, int Index>
+struct AtT;
+
+template<class List, int Index>
+using At = typename AtT<List, Index>::type;
+
+template<class List, int Index>
+struct AtT {
+  using type = Front<PopFront<List, Index>>;
+};
+\end{cppcode}
+Теперь важно добавить обработку ошибок:
+\begin{cppcode}
+template<class List, int Index>
+struct AtT;
+
+template<class List, int Index>
+using At = typename AtT<List, Index>::type;
+
+template<class List, int Index>
+struct AtT {
+  static_assert(isTypeList<List>,
+                "The first argument of At MUST be a type List!");
+  static_assert(Index >= 0, "The second argument of At MUST be non negative!");
+  static_assert(Index < Size<List>,
+      "The second argument of At MUST be less the the size of the type List!");
+  using type = Front<PopFront<List, Index>>;
+};
+\end{cppcode}
+Тут мы проверяем три условия:
+\begin{enumerate}
+\item Что класс \verb"List" является действительно списком типов.
+
+\item Что индекс неотрицательный.
+
+\item Что индекс не больше, чем размер списка.
+\end{enumerate}
+В этом подходе все хорошо, однако у нас в одном классе находятся три \verb"static_assert"-а и еще вызов вспомогательных шаблонов.
+В итоге при вызове вроде такого
+\begin{cppcode}
+using Elem = At<int, -1>;
+\end{cppcode}
+Вы увидите не только ошибки от двух ассертов из \verb"At", но еще и ошибку из \verb"PopFront".
+Это нужно решать специализациями шаблона так, чтобы в проблемных специализациях не было некорректных вызовов других шаблонов.
+
+\paragraph{Избавление от лишнего вывода ошибок}
+
+Для этого можно во вспомогательном шаблоне \verb"AtT" завести флаг на корректность данных.
+\begin{cppcode}
+template<class List, int Index, bool Level>
+struct AtT;
+
+template<class List, int Index>
+using At = typename AtT<List, Index, isDataCorrect<List, Index>>::type;
+
+template<class List, int Index>
+struct AtT<List, Index, false> {
+  static_assert(isTypeList<List>,
+                "The first argument of At MUST be a type List!");
+  static_assert(Index >= 0, "The second argument of At MUST not be negative!");
+  using type = void;
+};
+
+template<template<class...> class List, class... Types, int Index>
+struct AtT<List<Types...>, Index, false> {
+  static_assert(Index >= 0, "The second argument of At MUST not be negative!");
+  static_assert(
+      Index < Size<List<Types...>>,
+      "The second artument of At MUST be less than the size of the type List!");
+  using type = void;
+};
+
+template<class List, int Index>
+struct AtT<List, Index, true> {
+  using type = Front<PopFront<List, Index>>;
+};
+\end{cppcode}
+Заметьте, что для обработки ошибок, мы специально делаем две специализации: для списка типов и не для списка типов.
+Это связано с тем, что мы не хотим, чтобы функция \verb"Size" бросала ошибки, если \verb"List" не является списком типов.
+При этом в обоих случаях надо вставить те ассерты, за счет которых могла быть ошибка.
+В первой специализации у нас \verb"List" точно не список, а потому условие на то, что \verb"Index" больше, чем размер списка не имеет смысла и мы его не проверяем.
+Во второй специализации у нас наоборот \verb"List<Types...>" всегда список, а потому мы не проверяем условие на список типов.
+Зато в этом случае имеет смысл проверить, что \verb"Index" не превосходит размера списка.
+Кроме того, чтобы подавить ошибку про отсутствие типа \verb"type" внутри класса, мы вводим тип заглушку вида \verb"void".
+
+\paragraph{Проверка сложного условия}
+
+Теперь разберем как же проверить на корректность данных.
+Мы бы могли написать так:
+\begin{cppcode}
+template<class List, int Index>
+constexpr bool isDataCorrect = isTypeList<List> && Index >= 0 && Index < Size<List>;
+\end{cppcode}
+Однако, при такой имплементации если \verb"List" не является списком типов, то функция \verb"Size" будет кидать ошибки.
+А мы этого не хотим.
+Потому тут у нас логически ветвление:
+\begin{enumerate}
+\item Если \verb"List" не список типов, то сразу вернуть \verb"false"
+
+\item Если же \verb"List" список типов, то надо вернуть проверку на индекс.
+\end{enumerate}
+Делается это все с помощью специализаций.
+А для этого надо перейти к классам.
+\begin{cppcode}
+template<class List, int Index, bool isList>
+struct isDataCorrectT : std::false_type {
+};
+
+template<class List, int Index>
+struct isDataCorrectT<List, Index, true> {
+  static constexpr bool value = Index >= 0 && Index < Size<List>;
+};
+
+template<class List, int Index>
+constexpr bool isDataCorrect = isDataCorrectT<List, Index, isTypeList<List>>::value;
+\end{cppcode}
+Вот такая имплементация функции \verb"At" и корректности ее данных не будет кидать лишних ошибок и вывод будет намного чище, чем если бы мы пошли прямым путем.
+
+\paragraph{Странная обработка ошибок}
+
+Если вы обратили внимание, то вот тут
+\begin{cppcode}
+template<class List, int Index>
+struct AtT<List, Index, false> {
+  static_assert(isTypeList<List>,
+                "The first argument of At MUST be a type List!");
+  static_assert(Index >= 0, "The second argument of At MUST not be negative!");
+  using type = void;
+};
+\end{cppcode}
+Первая проверка выглядит лишней.
+Ведь мы зашли в эту специализацию, предполагая, что \verb"List" не является списком типов.
+Так почему бы не написать так
+\begin{cppcode}
+template<class List, int Index>
+struct AtT<List, Index, false> {
+  static_assert(false,
+                "The first argument of At MUST be a type List!");
+  static_assert(Index >= 0, "The second argument of At MUST not be negative!");
+  using type = void;
+};
+\end{cppcode}
+Однако, мы живем в мире C++, в котором использование \verb"false" напрямую в \verb"static_assert" является UB.
+Это супер тупо, но эту проблему приходится решать искусственным образом.
+В примере выше, я просто еще раз позвал проверку на список, которая гарантированно даст \verb"false".
+Однако, можно сделать вызов шаблона, который всегда даст \verb"false" вне зависимости от аргумента.
+Для этого надо ввести вспомогательный условный \verb"false".
+Это делается так: мы определяем шаблонную переменную, которая всегда вычисляется в \verb"false".
+\begin{cppcode}
+template <class...>
+struct FalseT : std::bool_constant<false> { };
+
+template <class... Ts>
+constexpr bool False = FalseT<Ts...>::value;
+
+static_assert(False<List>, "Error message!");
+\end{cppcode}
+Есть желание использовать \verb"False<>", но это не сработает, потому что это вычислится явно в \verb"false" из-за отсутствия зависимостей.
+И вроде бы это пофиксили в C++23, но я не уверен на 100\%.
+
+\paragraph{Фильтрация элементов}
+
+Сама имплементация этого метода не сложная.
+Куда более интересной является имплементация проверки, что аргумент метода является предикатом.
+В начале напишем имплементацию метода:
+\begin{cppcode}
+template<class List, template<class> class Predicate>
+struct FilterImpl;
+
+template<class List, template<class> class Predicate>
+using Filter = typename FilterImpl<List, Predicate>::type;
+
+template<class List, template<class> class Predicate>
+struct FilterImpl {
+  static_assert(isTypeList<List>,
+                "The first argument of Filter MUST be a type List!");
+};
+
+template<template<class...> class List, class... Types, template<class> class Predicate>
+struct FilterImpl<List<Types...>, Predicate> {
+    static_assert(hasBoolValue<Predicate<Type>>,
+                "The second argument of Filter MUST be a predicate!");
+  using Tail = Filter<List<Types...>, Predicate>;
+  using type =
+      IfElse<Predicate<Type>::value, PushFront<Type, Tail>, Tail>;
+};
+
+template<template<class...> class List, template<class> class Predicate>
+struct FilterImpl<List<>, Predicate> {
+  using type = List<>;
+};
+\end{cppcode}
+Теперь давайте попробуем определить проверку, что \verb"Predicate" это предикат.
+Мы по-хорошему хотим проверить, что для любого класса \verb"T", класс \verb"Predicate<T>" содержит статическую \verb"constexpr" переменную \verb"value" имеющую тип \verb"bool".
+Конечно же для любого типа мы это не проверим.
+Потому идея в том, чтобы делать проверку лишь для тех типов, для которых вызывается этот предикат.
+В частности мы взываем его для первого типа \verb"Type" в списке.
+А потому надо лишь проверить, что \verb"Predicate<Type>" содержит указанную переменную.
+Идея проверки держится на простой идее: если в аргументах специализации шаблона происходит ошибка, то такой шаблон просто игнорируется.
+Такой принцип называется SFINAE.
+То есть мы бы хотели сделать что-то такое:%
+\footnote{Имплементация ниже не работает из-за особенностей языка.
+Я объясню почему она не работает и приведу работающую.}
+\begin{cppcode}
+template<class T>
+constexpr bool isBool = std::is_same_v<std::remove_cv_t<T>, bool>;
+
+template<class T, bool boolFlag = true>
+struct hasBoolValueT : std::false_type {};
+
+template<class T>
+struct hasBoolValueT<T, isBool<decltype(T::value)>> : std::true_type {};
+
+template<class T>
+constexpr bool hasBoolValue = hasBoolValueT<T>::value;
+\end{cppcode}
+Такая имплементация не сработает и я объясню почему.
+Но она достаточно простая, чтобы понять, что мы хотим и как работает принцип SFINAE.
+Заметьте, что у нас есть общий шаблон на строчках~4-5 и специализация на строчках~7-8.
+Если набор параметров \verb"T" и \verb"boolValue" подходит под специализацию, то вызывается специализация, если не подходит или ошибка при генерации специализации, то вызывается общий шаблон.
+При этом второй аргумент всегда по умолчанию принимает значение \verb"true".
+
+\paragraph{Как это работает}
+
+Какое мы ожидаем поведение от такой имплементации:
+\begin{cppcode}
+class A {
+  static constexpr int value = 0;
+};
+class B {
+  static constexpr bool value = false;
+};
+class C {
+};
+
+std::cout << "has bool value " << hasBoolValue<A> << '\n';
+// returns: has bool value 0
+std::cout << "has bool value " << hasBoolValue<B> << '\n';
+// returns: has bool value 1
+std::cout << "has bool value " << hasBoolValue<C> << '\n';
+// returns: has bool value 0
+\end{cppcode}
+Как это работает:
+\begin{enumerate}
+\item В начале мы пытаемся обратиться к шаблону \verb"hasBoolValueT<T, boolFlag>" с параметрами \verb"A" и \verb"true".
+
+\item Теперь мы должны понять, какой из двух шаблонов лучше подходит для этих параметров.
+\begin{enumerate}
+\item Первый шаблон \verb"hasBoolValueT<T, boolFlag>".
+Под этот шаблон подходит все что угодно, где первый аргумент любой тип \verb"T", а второй -- любое булево значение \verb"boolValue".
+
+\item Второй шаблон \verb"hasBoolValueT<T, isBool<decltype(T::value)>>".
+Мы должны подставить вместо \verb"T" класс \verb"A" и посмотреть подходит ли этот шаблон нам или нет.
+При вычислении \verb"decltype(A::value)" получаем тип \verb"int".
+И потому \verb"isBool" возвращает \verb"false".
+Значит получается \verb"hasBoolValueT<A, false>";
+Значит вторая специализация для класса \verb"A" подходит только если второй аргумент \verb"false".
+\end{enumerate}
+Так как мы зовем шаблон \verb"hasBoolValue" с параметрами \verb"A" и \verb"true", то вторая специализация нам не подходит.
+Потому будет выбрана первая специализация.
+А первая специализация содержит \verb"value" со значением \verb"false".
+\end{enumerate}
+Теперь посмотрим, что произойдет в случае класса \verb"B".
+\begin{enumerate}
+\item В начале мы пытаемся обратиться к шаблону \verb"hasBoolValueT<T, boolFlag>" с параметрами \verb"B" и \verb"true".
+
+\item Теперь мы должны понять, какой из двух шаблонов лучше подходит для этих параметров.
+\begin{enumerate}
+\item Первый шаблон \verb"hasBoolValueT<T, boolFlag>".
+Под этот шаблон подходит все что угодно, где первый аргумент любой тип \verb"T", а второй -- любое булево значение \verb"boolValue".
+
+\item Второй шаблон \verb"hasBoolValueT<T,  isBool<decltype(T::value)>>".
+Мы должны подставить вместо \verb"T" класс \verb"B" и посмотреть подходит ли этот шаблон нам или нет.
+При вычислении \verb"decltype(B::value)" получаем тип \verb"bool".
+И потому \verb"isBool" возвращает \verb"true".
+Значит получается \verb"hasBoolValueT<B, true>";
+Значит вторая специализация для класса \verb"B" тоже подходит для параметров \verb"B" и \verb"true".
+\end{enumerate}
+Так как вторая специализация более специфичная, то из двух подходящих будет выбрана именно она.
+Но вторая специализация содержит \verb"value" со значением \verb"true".
+\end{enumerate}
+И наконец последний случай -- случай класса \verb"C":
+\begin{enumerate}
+\item В начале мы пытаемся обратиться к шаблону \verb"hasBoolValueT<T, boolFlag>" с параметрами \verb"C" и \verb"true".
+
+\item Теперь мы должны понять, какой из двух шаблонов лучше подходит для этих параметров.
+\begin{enumerate}
+\item Первый шаблон \verb"hasBoolValueT<T, boolFlag>".
+Под этот шаблон подходит все что угодно, где первый аргумент любой тип \verb"T", а второй -- любое булево значение \verb"boolValue".
+
+\item Второй шаблон \verb"hasBoolValueT<T,  isBool<decltype(T::value)>>".
+Мы должны подставить вместо \verb"T" класс \verb"C" и посмотреть подходит ли этот шаблон нам или нет.
+При вычислении \verb"C::value" происходит ошибка, так как нет статической переменной \verb"value" внутри класса \verb"C".
+Значит этот шаблон игнорируется вовсе в данном случае.
+\end{enumerate}
+В итоге остается только одна первая специализация, которую компилятор и выбирает.
+А первая специализация содержит \verb"value" со значением \verb"false".
+\end{enumerate}
+В последнем случае важно, что ошибка происходит именно в аргументах шаблона при специализации.
+
+\paragraph{Как заставить это компилироваться}
+
+Как я написал выше, пример который я написал к сожалению не скомпилируется.
+Причина в следующем коде:
+\begin{cppcode}
+template<class T>
+struct hasBoolValueT<T, isBool<decltype(T::value)>> : std::true_type {};
+\end{cppcode}
+Здесь во втором аргументе у нас вычисляется константа, которая зависит от шаблонного параметра \verb"T" из первого аргумента.
+В языке запрещено такое вычисление.
+Типы могут друг от друга зависеть, а константы нет.
+Потому чтобы решить эту проблему, нужно сделать замену \verb"bool" литералов на типы.
+Это можно сделать заменой \verb"bool" $\rightarrow$ \verb"std::integral_constant<bool, -->".
+Тогда $m\mapsto {}$\verb"std::integral_constant<bool, m>".
+И код будет изменен следующим образом:
+\begin{cppcode}
+template<class T>
+constexpr bool isBool = std::is_same_v<std::remove_cv_t<T>, bool>;
+
+template<class T, class Flag = std::true_type>
+struct hasBoolValueT : std::false_type {};
+
+template<class T>
+struct hasBoolValueT<T, std::integral_constant<bool, isBool<decltype(T::value)>>>
+    : std::true_type {};
+
+template<class T>
+constexpr bool hasBoolValue = hasBoolValueT<T>::value;
+\end{cppcode}
+Данное решение делает все, что было описано выше, но теперь это компилируется.
+Тут не было содержательных изменений, только особенности языка, чтобы побороться с условиями на аргументы шаблонов и все.
+Это, кстати, еще одна из причин, почему люди стараются пользоваться классами, а не значениями.
+
+\paragraph{Еще немного про аргументы}
+
+Есть желание упростить условие внутри второго аргумента и завернуть это во вспомогательный тип.
+Это можно сделать разными способами.
+Вот несколько примеров, которые могут прийти на ум.
+\begin{cppcode}
+template<auto V>
+constexpr bool hasTypeBool = isBool<decltype(V)>;
+
+template<class T>
+struct hasBoolValueT<T, std::integral_constant<bool, hasTypeBool<T::value>>>
+    : std::true_type {};
+\end{cppcode}
+или
+\begin{cppcode}
+template<class T>
+constexpr bool hasValueOfTypeBool = isBool<decltype(T::value)>;
+
+template<class T>
+struct hasBoolValueT<T, std::integral_constant<bool, hasValueOfTypeBool<T>>>
+    : std::true_type {};
+\end{cppcode}
+Первый вариант все еще сработает и дает более удобный синтаксис.
+Второй же вариант приведет к ошибке компиляции.
+Причина тут в том, что во втором случае теперь обращение \verb"T::value" происходит не в аргументах специализации шаблона, а мы просто вызываем шаблон \verb"hasTypeBool" с ошибочным аргументом в строке~2.
+То есть при сворачивании выражений в более читаемые, следите за тем, чтобы то, что выдает ошибку, было непосредственно в аргументах специализации.
+А все остальное можно свободно прятать во вспомогательную функцию, чтобы сделать аргументы читаемыми.
+
+\paragraph{Имя переменной}
+
+Вот тут у меня только плохие новости.
+Механизмов изменять имя переменной в языке нет.
+То есть под каждую переменную придется писать очередную проверку снова и снова.
+И вот это то самое единственное место, где могут пригодиться макросы.
+Надо превратить вот этот код в макрос:
+\begin{cppcode}
+template<class T, class Flag = std::true_type>
+struct hasBoolValueT : std::false_type {};
+
+template<class T>
+struct hasBoolValueT<T, std::integral_constant<bool, isBool<decltype(T::value)>>>
+    : std::true_type {};
+
+template<class T>
+constexpr bool hasBoolValue = hasBoolValueT<T>::value;
+\end{cppcode}
+Делаем так.
+В начале добавим вспомогательный шаблон для проверки типа объекта:%
+\footnote{Операция \texttt{\#\#} для препроцессора является конкатенацией строк.}
+\begin{cppcode}
+template<class T, auto V>
+constexpr bool hasTypeAs = std::is_same_v<T, std::remove_cv_t<decltype(V)>>;
+
+#define HAS_MEMBER_OF_TYPE(member, type)                                       \
+  template<class T, class Condition = std::true_type>                          \
+  struct Has##member##OfType##type##T : std::false_type {};                    \
+  template<class T>                                                            \
+  struct Has##member##OfType##type##T<                                         \
+      T, std::integral_constant<bool, hasTypeAs<type, T::member>>>             \
+      : std::true_type {};                                                     \
+  template<class T>                                                            \
+  constexpr bool has##member##OfType##type =                                   \
+      Has##member##OfType##type##T<T>::value;
+\end{cppcode}
+Теперь надо в начале сгенерировать шаблон для нужного имени и типа:
+\begin{cppcode}
+HAS_MEMBER_OF_TYPE(x, int)
+\end{cppcode}
+Этот шаблон развернется в
+\begin{cppcode}
+  template<class T, class Condition = std::true_type>
+  struct HasxOfTypeintT : std::false_type {};
+  template<class T>
+  struct HasxOfTypeintT<
+      T, std::integral_constant<bool, hasTypeAs<int, T::x>>>
+      : std::true_type {};
+  template<class T>
+  constexpr bool hasxOfTypeint = HasxOfTypeintT<T>::value;
+\end{cppcode}
+И теперь его можно использовать так:
+\begin{cppcode}
+class A {
+public:
+  static constexpr int x = 0;
+};
+
+class B {
+  static constexpr int x = 0;
+};
+
+int main() {
+  std::cout << "has int x " << hasxOfTypeint<A> << '\n';  // returns true
+  std::cout << "has int x " << hasxOfTypeint<B> << '\n';  // returns false
+  return 0;
+}
+\end{cppcode}
+Обратите внимание, что тут идет проверка на доступную статическую переменную типа \verb"int" с именем \verb"x" внутри класса.
+Правильная проверка на наличие тех или иных полей в классе -- это отдельный вопрос.
 % TO DO
 
-\subsubsection{Список элементов}
-% TO DO
+\paragraph{Избавление от дубликатов}
 
-\subsubsection{Список однотипных элементов}
-% TO DO
+При избавлении от дубликатов вопрос в том, кого оставлять.
+Стандартная тактика -- оставлять самое первое вхождение или самое последнее.
+Давайте имплементируем первый подход.
+\begin{cppcode}
+template<class List>
+struct NoDuplicatesImpl;
+
+template<class List>
+using NoDuplicates = typename NoDuplicatesImpl<List>::type;
+
+template<class List>
+struct NoDuplicatesImpl {
+  static_assert(isTypeContainer<List>,
+                "Argument of NoDuplicates MUST be a type List!");
+};
+
+template<template<class...> class List, class Type1, class... Types>
+struct NoDuplicatesImpl<List<Type1, Types...>> {
+private:
+  using GoodTail = NoDuplicates<List<Types...>>;
+  using TailWithoutHead = Erase1<GoodTail, Type1>;
+
+public:
+  using type = Prepend1<Type1, TailWithoutHead>;
+};
+\end{cppcode}
+Если же надо оставить самые последние вхождения, то можно имплементировать так
+\begin{cppcode}
+template<template<class...> class List, class Type1, class... Types>
+struct NoDuplicatesImpl<List<Type1, Types...>> {
+private:
+  using GoodTail = NoDuplicates<List<Types...>>;
+
+public:
+  using type = IfElse<Contains<Type1, GoodTail>, GoodTail, Prepend<Type1, GoodTail>>;
+};
+\end{cppcode}
+
+\paragraph{Множество подмножеств}
+
+Это одна из интересных операций, которая легко делается с помощью \verb"MAP" и рекурсии.
+\begin{cppcode}
+template<class List>
+struct PowerSetImpl;
+
+template<class List>
+using PowerSet = typename PowerSetImpl<List>::type;
+
+template<class List>
+struct PowerSetImpl {
+  static_assert(isTypeList<List>,
+                "Argument of PowerSet MUST be a type List!");
+};
+
+template<template<class...> class List, class Type, class... Types>
+struct PowerSetImpl<List<Type, Types...>> {
+  using TailPowerSet = typename PowerSet<List<Types...>>;
+
+  template<class T>
+  using AddHead = PushFront<Type, T>;
+
+  using HeadWithOthers = Map<TailPowerSet, AddHead>;
+
+  using type = Merge2<HeadWithOthers, TailPowerSet>;
+};
+
+template<template<class...> class List>
+struct PowerSetImpl<List<>> {
+  using type = List<List<>>;
+};
+\end{cppcode}
+Логика в этой имплементации следующая.
+Если есть список из типов $L = \{t_1,\ldots, t_n\}$.
+То в начале составим все подмножеств для $S = 2^{\{t_2, \ldots, t_n\}}$.
+После чего надо к каждому множеству из $S$ добавить пропущенный $t_1$ и получим $S'$.
+Тогда $S\cup S'$ и будет множеством всех подмножеств в $L$.
+
+\paragraph{Множество пар}
+
+Еще одна интересная операция -- список всех пар.
+\begin{cppcode}
+template<class List>
+struct PairSetImpl;
+
+template<class List>
+using PairSet = typename PairSetImpl<List>::type;
+
+template<class List>
+struct PairSetImpl {
+  static_assert(isTypeList<List>,
+                "Argument of PairSet MUST be a type List!");
+};
+
+template<template<class...> class List, class Type, class... Types>
+struct PairSetImpl<List<Type, Types...>> {
+  using TailPairs = PairSet<List<Types...>>;
+
+  template<class T>
+  using AddHeadFront = List<Type, T>;
+
+  using HeadListPairs = Map<List<Type, Types...>, AddHeadFront>;
+
+  template<class T>
+  using AddHeadBack = List<T, Type>;
+
+  using TailHeadPairs = Map<List<Types...>, AddHeadBack>;
+
+  using type = Merge<HeadListPairs, TailHeadPairs, TailPairs>;
+};
+
+template<template<class...> class List>
+struct PairSetImpl<List<>> {
+  using type = List<>;
+};
+\end{cppcode}
+Визуально этот подход можно представлять себе так.
+Если у нас есть список типов $L = \{t_1,\ldots, t_n\}$, то все пары можно изобразить в следующем квадрате
+\[
+\xymatrix@R=10pt@C=10pt{
+  {}&{t_1}&{t_2}&{\ldots}&{t_n}\\
+  {t_1}&{\phantom{A}2}{\save
+   [].[rrr]*+[F-]\frm{}
+  \restore}&{}&{}&{}\\
+  {t_2}&{\phantom{A}3}{\save
+   [].[dd]*+[F-]\frm{}
+  \restore}&{\phantom{A}1}{\save
+   [].[rrdd]*+[F-]\frm{}
+  \restore}&{}&{}\\
+  {\vdots}&{}&{}&{}&{}\\
+  {t_n}&{}&{}&{}&{}\\
+}
+\]
+Здесь соответствие следующее:
+\begin{enumerate}
+\item \verb"TailPairs".
+Это просто все пары в списке без первого элемента.
+В этом месте идет рекурсия.
+
+\item \verb"HeadListPairs".
+Это мы строим пары $(t_1, t)$, где $t$ пробегает весь список $L$ (включая $t_1$).
+
+\item \verb"TailHeadPairs".
+Это мы строим все пары вида $(t, t_1)$, где $t$ пробегает хвост, то есть $L \setminus\{t_1\}$.
+\end{enumerate}
+И в конце все три списка сливаются в один в порядке $2$, $3$, $1$.
+
+\subsection{Список элементов}
+
+Список элементов разного типа -- это любой шаблон вида
+\begin{cppcode}
+template<auto...>
+struct List {};
+\end{cppcode}
+Тогда в нем можно хранить элементы следующим образом:
+\begin{cppcode}
+struct A {
+  void f() const {
+  }
+  static void g() {
+  }
+};
+
+void f() {
+}
+
+template<auto...>
+struct List {};
+
+using MyList = List<1, 'c', f, &A::f, A::g>;
+\end{cppcode}
+Обратите внимание, что обычные функции и статические функции можно складывать без взятия указателя с помощью \verb"&".
+
+\subsubsection{Список операций}
+
+Список операций тут такой же как и у списка типов, но с минимальными изменениями.
+Из интересного:
+\begin{enumerate}
+\item Можно добавить операцию \verb"TypeOf", которая возвращает тип $i$-ого элемента.
+
+\item Так как операцию над элементами можно делать двумя способами: с помощью шаблонов и с помощью \verb"constexpr" функций, то методы принимающие функции (например \verb"Map" или \verb"Foldl") могут принимать метод двумя разными способами.
+К сожалению или к счастью нельзя иметь шаблон с разными аргументами, потому приходится делать два шаблона.
+\end{enumerate}
+
+\subsubsection{Имплементация некоторых}
+
+Давайте начнем с \verb"Map".
+Начнем с того, как можно использовать этот метод.
+Предположим, что у нас есть список целых чисел и мы хотим каждый элемент возвести в квадрат.
+\begin{cppcode}
+template<auto...>
+struct List {};
+
+using List1 = List<1, 2, 3, 4>;
+\end{cppcode}
+Метод возводящий элементы в квадрат можно имплементировать двумя способами.
+\begin{enumerate}
+\item С помощью шаблона
+\begin{cppcode}
+template<int arg>
+struct SquareT {
+  static constexpr int value = arg * arg;
+};
+
+using List2 = MapT<List1, SquareT>;
+// List 2 is List<1, 4, 9, 16>;
+\end{cppcode}
+
+\item С помощью \verb"constexpr" метода
+\begin{cppcode}
+constexpr int square(int arg) {
+  return arg * arg;
+}
+
+using List2 = Map<List1, square>;
+// List2 is List<1, 2, 9, 16>
+\end{cppcode}
+\end{enumerate}
+Давайте покажем как может выглядеть имплементация подобных методов.
+В начале шаблонная имплементация.
+\begin{cppcode}
+template<class List, template<auto> class F>
+struct MapTImpl {
+  static_assert(isElemList<List>,
+                "The first argument of Map MUST be an element list!");
+};
+
+template<template<auto> class F, template<auto...> class List,
+         auto... Elements>
+struct MapTImpl<List<Elements...>, F> {
+  // static_assert(F is a function, "The second argument of Map MUST be a function!");
+  using type = List<F<Elements>::value...>;
+};
+
+template<class List, template<auto> class F>
+using MapT = typename MapTImpl<List, F>::type;
+\end{cppcode}
+Теперь имплементация для \verb"constexpr" функций.
+\begin{cppcode}
+
+template<class List, auto F>
+struct MapImpl {
+  static_assert(isElemList<List>,
+                "The first argument of Map MUST be an element list!");
+};
+
+template<template<auto...> class List, auto... Elements, auto F>
+struct MapImpl<List<Elements...>, F> {
+  // static_assert(F is a function, "The second argument of Map MUST be a function!");
+  using type = List<F(Elements)...>;
+};
+
+template<class List, auto F>
+using Map = typename MapImpl<List, F>::type;
+\end{cppcode}
+Проверку, что \verb"F" является функцией, я убрал.
+Ее можно сделать по аналогии с тем, как это было разобрано для случая \verb"Filter" для списка типов.
+
+\paragraph{Что еще}
+
+Еще полезно иметь возможность конвертации списка элементов в типы.
+Это всегда делается с помощью шаблонов, так как \verb"constexpr" функции не могут вернуть тип, только значение.
+И в целом можно наворотить хитрую проверку, если шаблон метода содержит \verb"value", то значит делаем список данных, а если шаблон метода содержит тип \verb"type", то конвертируем к списку типов.
+
+\subsection{Список однотипных элементов}
+
+Если мы хотим работать со списком однотипных элементов, то у нас появляется возможность проверять тип элементов, прежде чем мы их положим в список.
+Так же можно сравнивать типы при слиянии списков и прочих операциях.
+Это дает дополнительную защиту от ошибок программиста.
+А потому обработка ошибок -- это главное, чем этот случай отличается от общего.
+Вот как может выглядеть список элементов одного типа:
+\begin{cppcode}
+template<class T, T... Elements>
+struct List {};
+
+using List1 = List<int, 1, 2, 3>;
+using List2 = List<char, 'a', 'b', 'c'>;
+\end{cppcode}
+
+\subsubsection{Имплементация некоторых методов}
+
+Вот как может выглядеть добавление одного элемента в начало списка с проверкой типов.
+\begin{cppcode}
+template<auto Element, class List>
+constexpr bool hasTypeAsInList = std::is_same_v<decltype(Element), TypeOf<List>;
+
+template<auto Element, class List>
+struct PushFront1Impl {
+  static_assert(isElemList<List>,
+                "The second argument of PushFront1 MUST be an element List!");
+  static_assert(hasTypeAsInList<Element, List>,
+                "The type of the first argument of PushFront1 MUST be the same as "
+                "the type of the elements in the List!");
+};
+
+template<class Type, template<class, Type...> class List, Type Element,
+         Type... Elements>
+struct PushFront1Impl<Element, List<Type, Elements...>> {
+  using type = List<Type, Element, Elements...>;
+};
+
+template<auto Element, class List>
+using PushFront1 = typename PushFront1Impl<Element, List>::type;
+\end{cppcode}
+Слияние двух списков можно имплементировать так:
+\begin{cppcode}
+template<class T1, class T2>
+struct Merge2Impl {
+  static_assert(isElemList<T1>,
+                "First argument of Merge MUST be an element container!");
+  static_assert(isElemList<T2>,
+                "Second argument of Merge MUST be an element container!");
+  static_assert(areSame2<T1, T2>, "First and Second arguments of Merge MUST be "
+                                  "the same element containers!");
+  static_assert(std::is_same_v<TypeOf<T1>, TypeOf<T2>>,
+                "Types of elements in containers in Merge MUST be the same!");
+};
+
+template<class Type, template<class, Type...> class List,
+         Type... Elements1, Type... Elements2>
+struct Merge2Impl<List<Type, Elements1...>,
+                  List<Type, Elements2...>> {
+  using type = List<Type, Elements1..., Elements2...>;
+};
+
+template<class T1, class T2>
+using Merge2 = typename Merge2Impl<T1, T2>::type;
+\end{cppcode}
+Мы обычно не думаем про проверку ошибок, когда пишем код.
+Но это в целом плохая привычка.
+И кроме того, для данного списка проверка ошибок -- это одна из основных фич, которые нужно имплементировать.

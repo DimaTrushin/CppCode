@@ -2,4 +2,260 @@
 
 
 \subsection{Compile-time цикл for}
-% TO DO
+
+\subsubsection{Что мы хотим}
+
+Давайте в начале обозначим проблему, которую мы хотим решать.
+Предположим, у нас есть следующая шаблонная функция:
+\begin{cppcode}
+template<int index>
+void function(double x, char y) {...}
+\end{cppcode}
+И мы хотим вызвать эту функцию несколько раз так:
+\begin{cppcode}
+void function<0>(1.2, 'c');
+void function<1>(1.2, 'c');
+void function<2>(1.2, 'c');
+void function<3>(1.2, 'c');
+void function<4>(1.2, 'c');
+\end{cppcode}
+Чтобы не заниматься копипастой, хотелось бы иметь возможность подобный вызов сделать так:
+\begin{cppcode}
+For<From{0}, To{5}>::Do<function>(1.2, 'c');
+\end{cppcode}
+К сожалению в точности так не получится, просто потому что нельзя передать шаблон функции в качестве параметра шаблона.
+Но можно функцию завернуть внутрь шаблонной структуры, которую уже можно легко передать в качестве параметра.
+
+\subsubsection{Имплементация}
+
+В начале заведем несколько служебных псевдонимов:
+\begin{cppcode}
+using IndexType = int;
+using From = AliasE<IndexType, struct FromSizeTTag>;
+using To = AliasE<IndexType, struct ToSizeTTag>;
+using Step = AliasE<IndexType, struct StepSizeTTag>;
+\end{cppcode}
+Здесь используются strong type aliases из раздела~\ref{section::CtorArgs}.
+Тип \verb"int" используется потому что целочисленные литералы имеют такой тип.
+Знаковый тип для лучшей поддержки арифметики над значениями, чтобы не мучиться с арифметикой и переполнением в отрицательную сторону.
+А псевдонимы используются для того, чтобы был более ясный интерфейс, сравните
+\begin{cppcode}
+For<0, 5>::Do<function>(1.2, 'c');
+For<From{0}, To{5}>::Do<function>(1.2, 'c');
+\end{cppcode}
+Может быть стоило использовать \verb"Begin" и \verb"End", ну да ладно.
+
+Теперь как имплементировать такой цикл.
+Главная идея в том, чтобы сделать вспомогательный шаблон, который принимает не начало и конец последовательности, а всю последовательность целиком, и вспомогательный шаблон, который генерирует последовательность.
+\begin{cppcode}
+template<From from, To to, Step step = Step{1}>
+struct For : ForImpl<MakeSequence<from, to, step>> {};
+\end{cppcode}
+Несколько замечаний по коду выше:
+\begin{enumerate}
+\item Шаблон \verb"ForImpl" принимает всю последовательность целых индексов целиком в виде списка элементов одинакового типа и для каждого индекса из списка вызывает шаблон функции с нужным шаблонным индексом.
+
+\item Шаблон \verb"MakeSequence" генерирует нужную последовательность.
+
+\item Мы используем вместо \verb"using" директивы наследование и объявляем новую структуру для того, чтобы в ошибках компилятора у нас возникало имя структуры для которой произошла ошибка.
+Мы хотим, чтобы это была \verb"For", а не просто \verb"ForImpl".
+\end{enumerate}
+Шаблон для генерации последовательности выглядит так
+\begin{cppcode}
+template<class...>
+struct List {};
+
+template<IndexType from, IndexType to, IndexType step, bool in_range>
+struct MakeSequenceImpl {
+  static_assert(in_range, "Internal error of MakeSequence!");
+  static_assert(from < to, "Incorrect call to implementation of MakeSequence!");
+  static_assert(step > 0, "The step argument of For MUST be positive!");
+  using type =
+      PushFront1<from, typename MakeSequenceImpl<from + step, to, step,
+                                                 (step < to - from)>::type>;
+};
+
+template<IndexType from, IndexType to, IndexType step>
+struct MakeSequenceImpl<from, to, step, false> {
+  static_assert(from < to, "Incorrect call to implementation of MakeSequence!");
+  static_assert(step > 0, "The step argument of For MUST be positive!");
+  using type = List<IndexType>;
+};
+
+template<IndexType from, IndexType to, IndexType step>
+using MakeSequence = typename MakeSequenceImpl<from, to, step, (from < to)>::type;
+\end{cppcode}
+Обратите внимание, что шаг от \verb"from" до \verb"to" может быть не единичный.
+Потому для правильной остановки индукции по длине остаточного хвоста, нам нужно проверять дополнительное условие, которое добавляется еще одним аргументом в имплементации для \verb"MakeSequenceImpl".
+Это условие проверяет есть ли следующий элемент в последовательности.
+Потому в случае \verb"false" значения, мы возвращаем список из начального значения \verb"from".
+Можно сделать поддержку отрицательного шага и тогда начало и конец должны сравниваться по-другому.
+Это все делается не сложно.
+
+Теперь мы можем имплементировать сам цикл \verb"For" так
+\begin{cppcode}
+template<class List>
+struct ForImpl {
+  static_assert(False<List>, "Internal error of For loop!");
+};
+
+template<class Type, template<class, Type...> class List,
+         IndexType... Elements>
+struct ForImpl<List<Type, Elements...>> {
+  template<template<IndexType> class F, class... Args>
+  static void Do(Args&&... args) {
+    (F<Elements>()(std::forward<Args>(args)...), ...);
+  }
+};
+\end{cppcode}
+В случае если нам передали список элементов типа \verb"IndexType", мы вызываем нужную функцию для каждого индекса из списка с одними и теми же run-time аргументами.
+И вот тут обратите внимание, как передается функция.
+Как я выше писал, шаблон функции к сожалению нельзя передать в качестве аргумента, вы можете передавать лишь шаблон класса.
+В этом случае функцию принято заворачивать в шаблон класса.
+И тут есть два способа:
+\begin{enumerate}
+\item Сделать статическую функцию внутри класса.
+Однако, в этом случае требуется договориться об использовании единого имени, чтобы все библиотеки использовали только его.
+
+\item Сделать \verb"operator()".
+Это не требует никакого дополнительного имени.
+Однако, для вызова этого метода нужно создавать временный объект класса и молиться, что компилятор это оптимизирует или это никак не скажется на производительности.
+\end{enumerate}
+Выше приведет второй подход.
+Он широко распространен в STL.
+И это меня жутко смущает, ведь никто не мешал в STL договориться для типов использовать имя \verb"type", для статических переменных имя \verb"value".
+Почему нельзя было выбрать еще одно третье имя для методов для меня загадка.
+Теперь наш пример с вызовом функции мог бы выглядеть так:
+\begin{cppcode}
+template<int index>
+void function(double x, char y) {...}
+
+template<int index>
+struct Function {
+  void operator()(double x, char y) const {
+    function(x, y);
+  }
+};
+
+For<From{0}, To{5}>::Do<Function>(1.2, 'c');
+\end{cppcode}
+Я специально сделал не интрузивное решение, в котором я не избавляюсь от шаблонной функции, а использую ее внутри оператора \verb"operator()".
+При желании этот шаблон можно усложнять и дополнять чем угодно.
+
+\subsubsection{Вариант for-each}
+
+Мы уже умеем хранить элементы в compilte-time списках.
+Это могут быть элементы одного типа или любого типа.
+\begin{cppcode}
+template<class T, T... Elems>
+struct ListT {};
+
+template<auto... Elems>
+struct ListA {};
+\end{cppcode}
+
+Теперь хочется пробежаться по списку и применить к нему какую-то операцию.
+Цикл \verb"For", который мы построили выше не дает явного доступа к имени переменной счетчика снаружи и им не очень удобно пользоваться для таких списков.
+Вот пример чего бы мы хотели для случая списка из любых элементов.
+\begin{cppcode}
+void f() { std::cout << "f()"; }
+void g() { std::cout << "g()"; }
+
+using ListA1 = ListA<f, g>;
+
+template<auto F>
+struct Caller {
+  void operator()(const char* Name) const {
+    std::cout << Name << " ";
+    F();
+    std::cout <<'\n';
+  }
+};
+int main() {
+  ForEach<ListA1>::Do<Caller>("func");
+}
+\end{cppcode}
+В данном случае список заполнен функциями, где каждая функция печатает свое имя.
+Мы хотим вызвать по-порядку все функции и напечатать дополнительно информацию.
+Вывод в этом вызове будет
+\begin{cppcode}
+func = f()
+func = g()
+\end{cppcode}
+В случае списка из элементов одного типа мы бы ожидали что-то такое
+\begin{cppcode}
+using ListE1 = ListE<int, 1, 2, 3, 4>;
+
+template<class T, T Elem>
+struct Printer {
+  void operator()(const char* Name) const {
+    std::cout << Name << " = " << Elem << '\n';
+  }
+};
+
+template<int Elem>
+using PrinterInt = PrinterT<int, Elem>;
+
+int main() {
+  ForEach<ListE1>::Do<PrinterInt>("value");
+}
+\end{cppcode}
+В этом случае вывод будет:
+\begin{cppcode}
+value = 1
+value = 2
+value = 3
+value = 4
+\end{cppcode}
+Обратите внимание на один неприятный момент.
+У нас для задания принтера надо сначала задать его тип, а потом уже элемент который мы будем печатать.
+Эту проблему можно решить двумя способами.
+Первый -- разделить аргументы, сделать композицию из двух методов с одним аргументом.
+Это делается вложенными шаблонами:
+\begin{cppcode}
+template<class T>
+struct Context {
+  template<T Elem>
+  struct Printer {
+    void operator()(const char* Name) const {
+      std::cout << Name << " = " << Elem << '\n';
+    }
+  };
+};
+\end{cppcode}
+Тогда вызов в цикле бы выглядел так
+\begin{cppcode}
+ForEach<ListA1>::Do<Context<int>::Printer>("value");
+\end{cppcode}
+У такого подхода проблема в том, что название класса \verb"Context" надо будет каждый раз придумывать разное или прятать во вспомогательное пространство имен, что раздует название <<метода>> для выполнения.
+Второй вариант -- биндинг аргумента.
+Все что мы хотим это в <<методе>>
+\begin{cppcode}
+template<class T, T Elem>
+struct Printer {
+  void operator()(const char* Name) const {
+    std::cout << Name << " = " << Elem << '\n';
+  }
+};
+\end{cppcode}
+Зафиксировать первый элемент и рассматривать его как функцию от второго.
+То есть идейно мы хотим что-то такое
+\begin{cppcode}
+ForEach<ListA1>::Do<Print<int, >>("value");
+\end{cppcode}
+Но так к сожалению это не работает в плюсах.
+Потому надо это делать дополнительными танцами с бубном.
+Для этого заведем дополнительный класс биндер.
+\begin{cppcode}
+template<class T, template<class U, U> class F>
+struct Bind {
+  template<T Elem>
+  using type = F<T, Elem>;
+};
+\end{cppcode}
+Теперь можно сделать вызов так
+\begin{cppcode}
+ForEach<ListE1>::Do<Bind<int, Printer>::type>("value");
+\end{cppcode}
+В этом случае недостаток в том, что надо название биндера прятать где-то, что опять же раздует размер <<имени>> для <<метода>>.
+И придется использовать служебное \verb"type".

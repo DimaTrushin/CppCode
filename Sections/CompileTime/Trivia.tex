@@ -2,4 +2,803 @@
 
 
 \subsection{Элементарные замечания}
-% TO DO
+
+Обычно этот раздел принято называть Мета-программирование.
+Я не очень люблю этот термин, потому что как будто это не программирование, а что-то другое, за гранью возможностей языка.
+Тем не менее, если вы посмотрите, то все что относят к мета программированию -- это всего лишь использование шаблонов иногда с добавлением макросов.
+И по сути все эти трюки нужны для того, чтобы сделать некоторые вычисления во время компиляции, а не во время исполнения.
+Потому я думаю, что название выше куда лучше будет соответствовать тому, что здесь будет обсуждаться.
+
+Теперь, что можно обсуждать в вычислениях во время компиляции.
+Как и в любом языке программирования нужно иметь достаточный набор данных и операций для исполнения.
+
+\subsubsection{Что можно использовать}
+
+К базовым данным можно отнести:
+\begin{enumerate}
+\item Литералы.
+\begin{cppcode}
+constexpr int x = 2; // 2 is an int literal
+
+enum class R : int { a, b, c };
+\end{cppcode}
+А начиная с C++20 можно использовать литералы с плавающей точкой:
+\begin{cppcode}
+constexpr float x = 1.2f; // is a float literal
+\end{cppcode}
+Вот пример использования:
+\begin{cppcode}
+template<int arg>
+struct A {};
+
+template<float arg>
+struct B {};
+
+template<R arg>
+struct C {};
+\end{cppcode}
+
+\item \verb"constexpr" переменные.
+Такие переменные можно использовать в контексте, где значение должно быть известно во время компиляции.
+Например, внутри шаблонных классов и функций:
+\begin{cppcode}
+constexpr int x = 1;
+
+template<int value>
+class A {};
+
+int main() {
+  const int z = 1;
+  A<x> y; // x can be used here but z cannot
+}
+\end{cppcode}
+Несмотря на то, что \verb"z" является константой, ее нельзя использовать в качестве аргумента для шаблона \verb"A", так как она не помечена \verb"constexpr".
+
+\item Имена = адреса функций (включая инстанциированные шаблоны функций).
+\begin{cppcode}
+using Signature = int(int);
+
+template<Signature function>
+class A {};
+
+int func1(int arg) {
+  return 2 * arg;
+}
+
+template<class Arg>
+int func2(Arg arg) {
+  // do something
+  return /*something*/;
+}
+
+int main () {
+  A<func1> x;
+  A<func2<int>> y;
+  A<[](int arg) { return 2 * arg; }> z;
+}
+\end{cppcode}
+В качестве аргумента для шаблона \verb"A" можно использовать и лямбды (начиная с c++20 ), которые не перехватывают ничего.
+В целом это разумно, так как такие лямбды это просто функции без имени.
+
+\item Начиная с C++20 можно использовать объекты структур с некоторыми ограничениями.
+Я не хочу прям супер строго определять, давайте скажу более или менее то, что надо знать, а строго можно посмотреть на \href{https://en.cppreference.com/w/cpp/language/template_parameters.html#Constant_template_parameter}{cppreference}.
+Вот приблизительно список ограничений:
+\begin{enumerate}
+\item Обязательно LiteralType.
+Я не хочу говорить, что это такое, но грубо говоря это <<хорошая>> структура без \verb"union"-ов и с \verb"constexpr" конструктором и деструктором.
+И это правилао рекурсивно применяется к членам и базовым классам.
+Так же сюда относятся массивы от LiteralType.
+
+\item Все поля (не статические) в классе должны быть публичные и не \verb"mutable".
+Все базовые классы должны быть публичными.
+
+\item Все поля (не статические) в классе  и все базовые классы должны удовлетворять условиям выше рекурсивно.
+Так же они могут быть массивами.
+\end{enumerate}
+Например можно писать так
+\begin{cppcode}
+struct S {
+  int x = 0;
+};
+
+template<S arg>
+struct C {};
+
+int main() {
+  C<S{}> x;
+  C<S{1}> y;
+}
+\end{cppcode}
+
+\item Имена классов и структур.
+\begin{cppcode}
+class A {};
+class B {};
+
+template<class... Args>;
+class C {};
+
+using List = C<A, B, int, double>;
+\end{cppcode}
+
+\item Имена шаблонов и их параметры.
+\begin{cppcode}
+template<class List>
+struct SizeOfImpl {
+  /*some error message*/
+}
+
+template<template<class...> class List, class... Args>
+struct SizeOfImpl<List<Args...>> {
+  static constexpr int value = sizeof...(Args);
+}
+
+template<class List>
+constexpr int SizeOf = SizeOfImpl<List>::value;
+\end{cppcode}
+На 6-7 строчках используется шаблонный класс \verb"List" в качестве аргумента для структуры.
+Это позволяет использовать не просто типы, а типы параметризованные значениями, что по сути является функцией на уровне типов.
+\end{enumerate}
+
+\subsubsection{Что нельзя использовать}
+
+\begin{enumerate}
+\item Литералы с плавающей точкой например, \verb"1.2".
+Если вы не используете все еще c++20.
+
+\item Строковые литералы, например, \verb$"abc"$.
+
+\item Пространства имен -- namespace-ы.
+\end{enumerate}
+
+\paragraph{До C++20}
+
+В мире до C++20 в языке невозможно написать что-то такое
+\begin{cppcode}
+template<double arg>
+struct A {};
+
+template<const char* str>
+struct B {};
+
+int main() {
+  A<1.2> x;
+  B<"123"> y;
+}
+\end{cppcode}
+В обоих случаях вы получите сообщение об ошибке.
+С другой стороны, если вы используете C++20, то литералы с плавающей точкой становятся доступны по умолчанию.
+А строковые литералы можно заставить работать ровно так как написано выше с помощью небольшой дополнительной работы.
+
+В мире до C++20 эту проблему можно вылечить костылями, а именно: завернуть константу в лямбду так:
+\begin{cppcode}
+using Sig1 = double();
+
+template<Sig1 function>
+struct A {};
+
+using Sig2 = const char*();
+
+template<Sig2 function>
+struct B {};
+
+int main() {
+  A<[](){ return 1.2; }> x;
+  B<[](){ return "123"; }> y;
+}
+\end{cppcode}
+Выглядит это ужасно и для улучшения читаемости это безобразие можно завернуть в макрос (это тот случай, когда без макросов обойтись нельзя, только в таких случаях надо пользоваться макросами):
+\begin{cppcode}
+#define CONST(arg) [](){ return arg; }
+
+template<class T>
+using TypeOf = T();
+
+template<TypeOf<double> function>
+struct A {};
+
+template<TypeOf<const char*> function>
+struct B {};
+
+int main() {
+  A<CONST(1.2)> x;
+  B<CONST("123")> y;
+}
+\end{cppcode}
+Читаемость сомнительная, но лучше я не могу предложить сейчас.
+Так же важная проблема -- типы, которые выглядят одинаково, будут на самом деле разными.
+Например код
+\begin{cppcode}
+std::cout << "are same = "<< std::is_same_v< A<CONST(1.2)>, A<CONST(1.2)>> << 'n';
+\end{cppcode}
+выдаст
+\begin{cppcode}
+are same = 0
+\end{cppcode}
+Потому что каждая лямбда имеет свой уникальный тип.
+Для литералов с плавающей точкой есть еще трюк с \verb"std::bit_cast", который доступен с C++20.
+Но в C++20 есть просто на много более удобный подход, который будет рассмотрен ниже.
+
+\paragraph{Начиная с C++20}
+
+Из коробки в C++20 все еще нельзя написать так
+\begin{cppcode}
+template<const char* arg>
+struct A {};
+
+int main() {
+  A<"123"> x;
+}
+\end{cppcode}
+Но можно сделать промежуточный объект \verb"ConstString", который поможет сохранить синтаксис использования как мы ожидаем.
+\begin{cppcode}
+template<size_t N>
+struct ConstString {
+  char data[N]{};
+  constexpr ConstString(const char (&str)[N]) {
+    std::copy_n(str, N, data);
+  }
+};
+
+template<ConstString arg>
+struct A {};
+
+int main() {
+  A<"123"> x;
+}
+\end{cppcode}
+И теперь код вида
+\begin{cppcode}
+std::cout << "are same = "<< std::is_same_v<A<"123">, A<"123">> << '\n';
+\end{cppcode}выдаст
+\begin{cppcode}
+are same = 1
+\end{cppcode}
+И не надо никаких танцев с бубнами.
+В целом это небольшая цена за полный функционал.
+
+\subsubsection{Операции}
+
+Если говорить про операции, то тут можно совершать операции над типами, а можно над данными (литералами и константами).
+
+\paragraph{Операции над данными}
+
+Во время компиляции у вас есть следующие способы реализовать такие операции:
+\begin{enumerate}
+\item С помощью шаблонов.
+Классический подход заключается в двух этапном применении шаблона:
+\begin{cppcode}
+constexpr int x = 1;
+
+template<int arg>
+struct TwiceImpl {
+  static constexpr int value = 2 * arg;
+};
+
+template<int arg>
+constexpr int Twice = TwiceImpl<arg>::value;
+
+constexpr int twice = Twice<x>;
+\end{cppcode}
+Можно написать еще проще:
+\begin{cppcode}
+constexpr int x = 1;
+
+template<int arg>
+constexpr int Twice = 2 * arg;
+
+constexpr int twice = Twice<x>;
+\end{cppcode}
+Однако, первый подход лучше, если вы хотите передать \verb"Twice" как аргумент в шаблон.
+То есть вы хотите передать метод через шаблонный аргумент.
+В этом случае нельзя предать шаблонную переменную в качестве аргумента.
+То есть такая попытка
+\begin{cppcode}
+template<int arg>
+constexpr int Twice = 2 * arg;
+
+template<template<int> int func> // compilation error
+struct A {};
+\end{cppcode}
+приведет к ошибке компиляции.
+В этом случае единственным возможным вариантом будет использовать промежуточный класс:
+\begin{cppcode}
+constexpr int x = 1;
+
+template<int arg>
+struct Twice {
+  static constexpr int value = 2 * arg;
+};
+
+template<int arg>
+constexpr int TwiceValue = Twice<arg>::value;
+
+template<template<int> class func>
+struct A {};
+
+int main() {
+  A<Twice> x;
+}
+\end{cppcode}
+В этом случае изначальную структуру лучше назвать без суффикса \verb"Impl", а переменную назвать значением этой <<функции>>.
+В STL принято структуру называть так как положено, а в имени переменной добавлять суффикс \verb"_v" к имени структуры.
+
+\item С помощью \verb"constexpr" функций.
+Почти любую функцию можно исполнять в константном контексте.
+Для этого надо лишь пометить ее как \verb"constexpr" и если компилятор ругнется на что-то, то вы узнаете, почему ее нельзя было использовать вместе с \verb"constexpr".
+\begin{cppcode}
+constexpr int twice(int arg) {
+  return 2 * arg;
+}
+
+template<int arg>
+class A {};
+
+int main() {
+  A<twice(3)> x;
+}
+\end{cppcode}
+
+\item С помощью макросов.
+НИКОГДА так НЕ делайте.
+\begin{cppcode}
+#define twice(x) 2 * x
+
+template<int arg>
+class A {};
+
+int main() {
+  A<twice(2)> x;
+}
+\end{cppcode}
+Вот так НИКОГДА НЕ делайте.
+\end{enumerate}
+
+\paragraph{Операции над типам}
+
+Во время компиляции у вас есть следующие способы реализовать такие операции:
+\begin{enumerate}
+\item С помощью шаблонов.
+Классический двухступенчатый подход:
+\begin{cppcode}
+template<class...>
+class List;
+
+template<class List>
+struct VectorizeImpl {
+  /*react to errors*/
+};
+
+template<template<class...> class List, class... Elements>
+struct VectorizeImpl <List<Elements...>> {
+  using type = List<std::vector<Elements>...>;
+};
+
+template<class List>
+using Vectorize = typename VectorizeImpl<List>::type;
+
+using MyList = List<int, double>;
+
+using VecList = Vectorize<MyList>;
+//VecList = List<std::vector<int>>, std::Vector<double>>;
+\end{cppcode}
+Причина такого подхода заключается в том, что \verb"using" нельзя специализировать.
+А потому приходится вводить промежуточную структуру.
+Подобный трюк используется когда надо сделать частичную специализвацию для функции.
+
+\item С помощью макросов.
+НИКОГДА так НЕ делайте.
+\begin{cppcode}
+#define double char
+
+template<double arg>
+class A {};
+
+int main() {
+  A<'2'> x;
+}
+\end{cppcode}
+Я лично найду вас и казню, если вы так сделаете.
+\end{enumerate}
+
+Самое полезное для нас -- это создание списков из классов, литералов и функций, и умение выполнять над ними различную работу.
+Я хочу в этом разделе обсудить в подход к работе над списками классов и элементов (фиксированного и разного типов).
+Такие списки полезны при имплементации стирающих типов и в целом при выполнении содержательной работы во время компиляции.
+А позже обсудить различные механизмы, использующие такие списки.
+Например, \verb"compile for loop" или \verb"for each" версия.
+
+\subsubsection{Вывод информации}
+
+\paragraph{Простой вывод}
+
+Если вам нужно получать информацию о данных во время компиляции, то единственный способ -- это получать данные в виде сообщений об ошибках.
+Самый простой способ получить информацию о типах или переменных -- это использование неопределенного шаблона.
+\begin{cppcode}
+template<class>
+struct TD;
+
+template<auto>
+struct VD;
+
+int main() {
+  constexpr int x = 5;
+  TD<decltype(x)> a;
+  VD<x> b;
+}
+\end{cppcode}
+Вывод об ошибках будет (зависит от компилятора)
+\begin{cppcode}
+implicit instantiation of undefined template 'TD<const int>'
+implicit instantiation of undefined template 'VD<5>'
+\end{cppcode}
+Названия \verb"TD" и \verb"VD" это сокращения от \verb"Type Detector" и \verb"Value Detector".
+Первый заметный минус этого подхода -- надо писать тип и еще имя ненужной переменной.
+Можно сделать синтаксис более приятным с помощью шаблонных переменных.
+Можно попробовать так:
+\begin{cppcode}
+template<class>
+struct TD;
+
+template<auto>
+struct VD;
+
+template<class T>
+constexpr TD<T> PrintT;
+
+template<auto T>
+constexpr VD<T> PrintV;
+
+int main() {
+  constexpr int x = 5;
+  PrintT<decltype(x)>;
+  PrintV<x>;
+}
+\end{cppcode}
+Тогда сообщения об ошибках будут такого сорта:
+\begin{cppcode}
+constexpr variable cannot have non-literal type 'const TD<const int>'
+implicit instantiation of undefined template 'TD<const int>'
+
+constexpr variable cannot have non-literal type 'const VD<5>'
+implicit instantiation of undefined template 'VD<5>'
+\end{cppcode}
+
+\paragraph{MSVC зависимая часть}
+
+Мы видим лишнее сообщение об ошибке, что нельзя определять \verb"constexpr" переменную не литерального типа.
+Оказывается, чтобы убрать эту ошибку достаточно сделать следующий трюк: нужно ввести промежуточный тип, который не даст развернуться анализу шаблона дальше.
+Честно говоря, я не на столько знаю тонкости обработки шаблонного кода языком, чтобы сказать, какие правила в точности тут работают.
+\begin{cppcode}
+template<class>
+struct TD;
+
+template<auto>
+struct VD;
+
+template<class T>
+struct Type : TD<T> {};
+
+template<auto T>
+struct Value : VD<T> {};
+
+template<class T>
+constexpr Type<T> PrintT;
+
+template<auto T>
+constexpr Value<T> PrintV;
+
+int main() {
+  constexpr int x = 5;
+  PrintT<decltype(x)>;
+  PrintV<x>;
+}
+\end{cppcode}
+Теперь сообщения об ошибках лучше
+\begin{cppcode}
+implicit instantiation of undefined template 'TD<const int>'
+
+implicit instantiation of undefined template 'VD<5>'
+\end{cppcode}
+Так можно проверять тип и значение любого сколь угодно сложного выражения.
+
+\paragraph{Вывод списка типов}
+
+Предположим, что мы хотим вывести список
+\begin{cppcode}
+namespace SomeLongName {
+  template<class...>
+  struct List {};
+  
+  PrintT<List<int, double>>;
+}
+\end{cppcode}
+В этом случае в выводе мы увидим
+\begin{cppcode}
+implicit instantiation of undefined template 'TD<SomeLongName::List<int, double>>'
+\end{cppcode}
+Хотелось бы убрать длинное имя для пространства имен для более удобного чтения вывода.
+Это можно сделать так.
+Заведем глобально (это очень плохая идея я понимаю) одно имя для списка, которое бы мы хотели иметь.
+И просто заменим имя списка на глобальное.
+\begin{cppcode}
+template<class>
+struct Out;
+
+template<class...>
+struct List {};
+
+namespace ext {
+template<class T>
+struct PrintImpl : Out<Clear<T>> {};
+
+template<class T>
+constexpr PrintImpl<T> PrintT;
+}
+
+namespace SomeLongName {
+  template<class...>
+  struct List {};
+  
+  ext::PrintT<List<int, double>>;
+}
+\end{cppcode}
+Я заменил часть названий на более приятные для глаза.
+Шаблон \verb"Out" нам нужен как принтер, через его имя мы будем выводить пользователю сообщение.
+Шаблон \verb"List" нужен как новое имя для шаблона используемого для обозначения списка.
+Мы будем подменять на него имя другого списка с длинным префиксом из пространств имен.
+Теперь давайте проанализируем как выглядит имплементация \verb"Clear".
+\begin{cppcode}
+namespace ext {
+template<class T>
+struct ClearImpl {
+  using type = T;
+};
+
+template<template<class...> class TList, class... Types>
+struct ClearImpl<TList<Types...>> {
+  using type = ::List<Types...>;
+};
+
+template<class T>
+using Clear = typename ClearImpl<T>::type;
+}
+
+namespace SomeLongName {
+  template<class...>
+  struct List {};
+  
+  ext::PrintT<List<int, double>>;
+}
+\end{cppcode}
+Обратите внимание, чтобы обратиться к глобальному \verb"List" используется явный квалификатор глобального пространства имен \verb"::List".
+Это нужно, потому что \verb"List" может быть определено в локальном пространстве имен и без явного доступа будет выбран не тот шаблон, который мы хотим.
+Теперь вывод будет более приятным:
+\begin{cppcode}
+implicit instantiation of undefined template 'Out<List<int, double>>'
+\end{cppcode}
+Однако, если мы сделаем вложенные списки, то проблема вернется:
+\begin{cppcode}
+namespace SomeLongName {
+  template<class...>
+  struct List {};
+  
+  ext::PrintT<List<int, double, List<char, int>>>;
+}
+\end{cppcode}
+Вывод будет
+\begin{cppcode}
+implicit instantiation of undefined template
+'Out<List<int, double, SomeLongName::List<char, int>>>'
+\end{cppcode}
+Для исправления этого дефекта, нужно запустить чистку имен рекурсивно:
+\begin{cppcode}
+namespace ext {
+template<class T>
+struct ClearImpl {
+  using type = T;
+};
+
+template<template<class...> class TList, class... Types>
+struct ClearImpl<TList<Types...>> {
+  using type = ::List<typename ClearImpl<Types>::type...>;
+};
+
+template<class T>
+using Clear = typename ClearImpl<T>::type;
+}
+\end{cppcode}
+Вот теперь будет выглядеть хорошо:
+\begin{cppcode}
+implicit instantiation of undefined template 'Out<List<int, double, List<char, int>>>'
+\end{cppcode}
+Однако, появляется другой дефект.
+Мы же заменяем на глобальный \verb"List" вообще любой шаблонный тип без разбору.
+Давайте сделаем так:
+\begin{cppcode}
+namespace SomeLongName {
+  template<class...>
+  struct List {};
+  
+  ext::PrintT<List<int, double, List<char, int>, std::vector<int>>>;
+}
+\end{cppcode}
+Внезапно вывод будет
+\begin{cppcode}
+implicit instantiation of undefined template 'Out<List<int, double, List<char, int>, List<int>>>'
+\end{cppcode}
+Так получается, потому что мы чистим все списки типов без разбору.
+Одним из решений этой проблемы может быть такое: давайте запомним самый первый тип списка, и в последствии будем менять только его.
+Для этого нам понадобятся функции сравнения шаблонов и подмены со сравнением.
+Вот так выглядит имплементация сравнения:
+\begin{cppcode}
+namespace ext {
+template<template<class...> class List1, template<class...> class List2>
+struct areSame2Impl : std::false_type {};
+
+template<template<class...> class List1>
+struct areSame2Impl<List1, List1> : std::true_type {};
+
+template<template<class...> class List1, template<class...> class List2>
+constexpr bool areSame2 = areSame2Impl<List1, List2>::value;
+}
+\end{cppcode}
+Еще я хочу сделать более удобным использование условного перехода.
+Для этого имплементирую
+\begin{cppcode}
+namespace ext {
+template<bool cond, class T1, class T2>
+using IfElse = typename std::conditional<cond, T1, T2>::type;
+}
+\end{cppcode}
+Теперь имплементируем замену только фиксированного шаблона:
+\begin{cppcode}
+template<class T, template<class...> class L>
+struct ClearIfImpl {
+  using type = T;
+};
+
+template<template<class...> class List1, class... Types,
+         template<class...> class L>
+struct ClearIfImpl<List1<Types...>, L> {
+  using type = IfElse<areSame2<List1, L>, ::List<Types...>,
+                      List1<typename ClearIfImpl<Types, L>::type...>>;
+};
+
+template<class List, template<class...> class L>
+using ClearIf = typename ClearIfImpl<List, L>::type;
+\end{cppcode}
+Теперь надо добавить специализацию \verb"Clear":
+\begin{cppcode}
+template<template<class...> class TList, class... Types>
+struct ClearImpl<TList<Types...>> {
+  using type = ::List<typename ClearIf<Types, TList>...>;
+};
+\end{cppcode}
+То есть теперь \verb"Clear" во время вызова рекурсии после первой подмены зовет \verb"ClearIf", который в рекурсии всегда зовет только себя.
+А это значит, что мы будем подменять только тип самого внешнего контейнера.
+Это решение не идеально, но как минимум для распечатки контейнеров подходит неплохо.
+Теперь мы получим вывод:
+\begin{cppcode}
+implicit instantiation of undefined template
+'Out<List<int, double, List<char, int>, std::vector<int>>>'
+\end{cppcode}
+
+\paragraph{Вывод списка элементов}
+
+Для вывода списка элементов надо воспользоваться уже проделанной работой.
+Все что нам надо -- это завести новый глобальный тип для отображения списка элементов и так же обработать случай контейнера из элементов для методов \verb"Clear" и \verb"ClearIf".
+\begin{cppcode}
+template<auto...>
+struct Seq {};
+
+namespace ext {
+...
+
+template<template<auto...> class List, auto... Elems, template<class...> class F>
+struct ClearIfImpl<List<Elems...>, F> {
+  using type = ::Seq<Elems...>;
+};
+
+template<template<auto...> class List, auto... Elems>
+struct ClearImpl<List<Elems...>> {
+  using type = ::Seq<Elems...>;
+};
+
+...
+}
+\end{cppcode}
+Вариант чистки списка элементов в \verb"ClearImpl" нужен, чтобы обработать если на самом верху нам выдали список элементов.
+А вариант чистки для \verb"ClearIfImpl" нужен для рекурсивной чистки.
+Причем какой тип \verb"F" нам все равно, потому что это подменяемый тип списка типов.
+Все списки элементов мы подменяем на один и тот же \verb"Seq".
+Теперь при исполнении
+\begin{cppcode}
+namespace SomeLongName {
+  template<class...>
+  struct List {};
+  
+  template<auto...>
+  struct Seq {};
+  
+  ext::PrintT<List<int, double, List<char, int>, std::vector<int>, Seq<1, 2, 3>>>;
+}
+\end{cppcode}
+Тогда вывод будет:
+\begin{cppcode}
+implicit instantiation of undefined template
+'Out<List<int, double, List<int>, std::vector<int>, Seq<1, 2, 3>>>'
+\end{cppcode}
+
+\subsubsection{Логические связки}
+
+Выше мы уже использовали связку \verb"IfElse", чтобы проверить выбирать тип в зависимости от условия.
+Это лишь нужно для того, чтобы изменить ужасный и длинный синтаксис из STL.
+Давайте я запишу другие связки, которые я бы использовал вместо STL-ных.
+Связка \verb"IfElse" приведена повторно для полноты картины этого блока.
+\begin{cppcode}
+namespace ext {
+template<bool cond, class T1, class T2>
+using IfElse = typename std::conditional<cond, T1, T2>::type;
+
+template<class... Ts>
+struct AndT : std::conjunction<Ts...> {};
+
+template<class... Ts>
+constexpr bool And = AndT<Ts...>::value;
+
+template<class... Ts>
+struct OrT : std::disjunction<Ts...> {};
+
+template<class... Ts>
+constexpr bool Or = OrT<Ts...>::value;
+
+template<class T>
+struct NotT : std::negation<T> {};
+
+template<class T>
+constexpr bool Not = NotT<T>::value;
+}
+\end{cppcode}
+Заметьте, что аргументы для логических операторов -- это классы, а не значения.
+Со значениями я и так могу делать все логические связки с помощью конструкций языка:
+\begin{cppcode}
+constexpr bool b1 = true;
+constexpr bool b2 = false;
+constexpr bool b3 = b1 && b2;
+constexpr bool b4 = b1 || b2;
+\end{cppcode}
+Связки выше предназначены для операций над типами, которые содержат информацию о значении результата.
+В этом случае подразумевается, что результат всегда является \verb"constexpr" статической константой с именем \verb"value".
+Например
+\begin{cppcode}
+template<class T>
+struct Condition1T {
+  static constexpr bool value = /*some condition on T*/;
+};
+
+template<class T>
+constexpr bool Condition1 = Condition1T<T>::value;
+
+template<class T>
+struct Condition2T {
+  static constexpr bool value = /*some condition T*/;
+};
+
+template<class T>
+constexpr bool Condition2 = Condition2T<T>::value;
+
+template<class T>
+using Condition3T = AndT<NotT<Condition1T<T>>, Condition2T<T>>;
+
+template<class T>
+constexpr bool Condition3 = Condition3T<T>::value;
+\end{cppcode}
+Как уже говорилось, такие промежуточные классы нужны для того, чтобы их можно было передавать в качестве аргументов в другие шаблоны.
+Можно было бы использовать только переменные \verb"Condition1" и \verb"Condition2" и с помощью них задать переменную \verb"Condition3" так
+\begin{cppcode}
+template<class T>
+constexpr bool Condition3 = !Condition2<T> && Condition2<T>;
+\end{cppcode}
+Однако, если мы хотим сделать операцию фильтрации по условию, то нам надо условие передавать как аргумент.
+В этом случае мы не сможем передать \verb"Condition3", но сможем передать \verb"Condition3T" в фильтрующий шаблон.
+В некотором смысле эти вспомогательные классы являются костылями вокруг ограничений языка.
