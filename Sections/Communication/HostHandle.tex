@@ -1491,7 +1491,7 @@ Host& operator=(Host&& other) noexcept {
 \footnote{Ура, мы нашли полезное(?) применение \texttt{const\_cast}-у!}
 \begin{cppcode}
 std::shared_ptr<T*> sharedOnMe() const {
-  return std::make_shared<T*>(static_cast<T*>(ptr())); } // Downcast
+  return std::make_shared<T*>(const_cast<T*>(ptr())); } // Downcast
 \end{cppcode}
 и тогда
 \begin{cppcode}
