@@ -149,3 +149,378 @@ Node node{.data = Data(), .status = Status::Visited | Status::Leaf};
 \end{enumerate}
 
 %\subsection{Знаковые и беззнаковые типы}
+
+\subsection{Не использовать встроенные типы}
+% TO DO
+
+Давайте для начала перечислим, какие типы в C++ относятся к встроенным:
+\begin{enumerate}
+\item Фундаментальные типы:
+\begin{enumerate}
+\item \verb"void" возможно с квалификаторами \verb"const" и \verb"volatile".
+
+\item \verb"std::nullptr_t" возможно с квалификаторами \verb"const" и \verb"volatile".
+
+\item Арифметические типы:
+\begin{enumerate}
+\item Целые типы (возможно с квалификаторами \verb"const" и \verb"volatile"):
+\begin{enumerate}
+\item \verb"bool"
+
+\item Character types:
+\begin{itemize}
+\item \verb"char", \verb"signed char", \verb"unsigned char".
+
+\item \verb"char8_t" (начиная с C++20).
+
+\item \verb"char16_t", \verb"char32_t", \verb"wchar_t".
+\end{itemize}
+
+\item Знаковые типы: \verb"signed char", \verb"short", \verb"int", \verb"long", \verb"long long".
+
+
+\item Беззнаковые типы: \verb"unsigned char", \verb"unsigned short", \verb"unsigned int", \\
+\verb"unsigned long", \verb"unsigned long long".
+\end{enumerate}
+
+\item Типы с плавающей запятой: \verb"float", \verb"double", \verb"long double" и их \verb"const" и \verb"volatile" версии.
+\end{enumerate}
+\end{enumerate}
+
+\item Составные типы:
+\begin{enumerate}
+\item Ссылки:
+\begin{enumerate}
+\item lvalue ссылки:
+\begin{enumerate}
+\item lvalue ссылка на объект.
+
+\item lvalue ссылка на функцию.
+\end{enumerate}
+
+\item rvalue ссылки:
+\begin{enumerate}
+\item rvalue ссылка на объект.
+
+\item rvalue ссылка на функцию.
+\end{enumerate}
+\end{enumerate}
+
+\item Указатели:
+\begin{enumerate}
+\item Указатель на объект.
+
+\item Указатель на функцию.
+\end{enumerate}
+
+\item Указатель на член класса:
+\begin{enumerate}
+\item Указатель на данные класса
+
+\item Указатель на метод класса
+\end{enumerate}
+
+\item Массивы
+
+\item Функции
+
+\item enum-ы
+\begin{enumerate}
+\item unscoped
+
+\item scoped
+\end{enumerate}
+
+\item Классы:
+\begin{enumerate}
+\item не являющиеся \verb"union"
+
+\item \verb"union"
+\end{enumerate}
+\end{enumerate}
+\end{enumerate}
+
+К скалярным типам относят следующие:
+\begin{enumerate}
+\item Арифметические типы
+
+\item enum-ы
+
+\item Указатели
+
+\item Указатели на член класса
+
+\item \verb"std::nullptr_t"
+
+\item И все \verb"const" и \verb"volatile" версии этих типов.
+\end{enumerate}
+
+Одна из основных проблем -- большинство встроенных типов неявно конвертируются друг к другу.
+А это может создать огромное количество проблем.
+Кроме того, со встроенными типами очень сложно определять проблемы вроде переполнения.
+Вы не можете просто так взять и добавить к встроенному типу какой-то метод, потому что они фундаментально отличаются от классов на уровне языка.
+Потому является очень хорошей практикой написать свои аналоги встроенным типам, которые не имеют неявной конвертации друг к другу, и в дальнейшем пользоваться именно этими типами вместо встроенных.
+Я бы ожидал имплементацию арифметических типов:
+\begin{cppcode}
+namespace ext {
+class Bool { ... };
+
+template<size_t size>
+class Char { ... };
+
+template<size_t size>
+class UChar { ... };
+
+template<size_t size>
+class Int { ... };
+
+template<size_t size>
+class UInt { ... };
+
+class Float { ... };
+
+class Double { ... };
+}
+\end{cppcode}
+Все метода этих классов важно сделать \verb"constexpr", \verb"noexcept".
+% TO DO 
+% Добавить пример имплементации.
+
+\subsection{Детекция переполнения}
+
+Для проверки на переполнение для целочисленных типов конечной точности можно использовать специальный тип-обертку.
+Использования класса выглядит приблизительно следующим образом:
+\begin{cppcode}
+template<class T>
+concept IntegerType = std::is_integral_v<T> && std::is_signed_v<T>;
+
+template<IntegerType T>
+class ODetector { ... };
+
+int main() {
+   ODetector<int> x = 2;
+   while (true) {
+     x *= x; // this will eventually signal about overflow
+   }
+   return 0;
+}
+\end{cppcode}
+Вместо использования чистого типа \verb"int" его надо завернуть в обертку.
+Философия в том, что у \verb"ODetector" можно включить или отключить сигнализацию о переполнении.
+И при отключенной сигнализации о переполнении код будет таким же эффективным, как голый \verb"int", а при наличии проверок о переполнении, мы точно их отловим, если они есть.
+По-хорошему нужно уметь настраивать следующие параметры детектора:
+\begin{enumerate}
+\item Включение и отключение проверки на переполнение.
+
+\item Механизм сообщения об ошибке.
+Например это может быть: \verb"assert", \verb"exception" или запись в лог.
+\end{enumerate}
+Подобную настройку можно сделать с помощью макросов.
+Подобные приемы можно посмотреть в разделе про обработку ошибок (раздел~\ref{section::CustomAsserts}).
+Ниже я буду использовать \verb"assert"-ы для сообщения об ошибке.
+Так же можно детектор переполнения вплести внутрь классов-оберток для встроенных типов, которые были описаны в предыдущем разделе.
+
+\paragraph{Имплементация}
+
+Вот как может выглядеть определение класса:
+\begin{cppcode}
+template<IntegerType T>
+class ODetector {
+public:
+  constexpr ODetector(T value) noexcept;
+  explicit constexpr operator T() const noexcept;
+
+  ODetector operator+() const noexcept;
+  ODetector operator-() const noexcept;
+  
+  ODetector& operator+=(ODetector other) noexcept;
+  ODetector& operator-=(ODetector other) noexcept;
+  ODetector& operator*=(ODetector other) noexcept;
+  ODetector& operator/=(ODetector other) noexcept;
+    
+  friend ODetector operator+(ODetector lhs, ODetector rhs) noexcept;
+  friend ODetector operator-(ODetector lhs, ODetector rhs) noexcept;
+  friend ODetector operator*(ODetector lhs, ODetector rhs) noexcept;
+  friend ODetector operator/(ODetector lhs, ODetector rhs) noexcept;
+  
+  friend bool operator==(ODetector lhs, ODetector rhs) noexcept;
+  friend bool operator!=(ODetector lhs, ODetector rhs) noexcept;
+  friend bool operator<(ODetector lhs, ODetector rhs) noexcept;
+  friend bool operator>(ODetector lhs, ODetector rhs) noexcept;
+  friend bool operator<=(ODetector lhs, ODetector rhs) noexcept;
+  friend bool operator>=(ODetector lhs, ODetector rhs) noexcept;
+    
+  static constexpr T max() noexcept;
+  static constexpr T min() noexcept;
+
+  static constexpr bool DoesUnaryMinusOverflow(T value) noexcept;
+  static constexpr bool DoesAdditionOverflow(T lhs, T rhs) noexcept;
+  static constexpr bool DoesSubtractionOverflow(T lhs, T rhs) noexcept;
+  static constexpr bool DoesMultiplicationOverflow(T lhs, T rhs) noexcept;
+  static constexpr bool DoesDivisionOverflow(T lhs, T rhs) noexcept;
+
+private:
+  T value_;
+};
+\end{cppcode}
+Обратите внимание, что все аргументы принимаются по значению, так как мы делаем обертку над встроенным типом, который выгоднее передавать по значению.
+При этом конвертация типа \verb"T" к \verb"ODetector" идет неявное, а в обратную сторону явная.
+Это продиктовано тем, что мы хотим чтобы константы типа \verb"T" можно было присвоить к \verb"ODetector<T>" без изменения кода.
+То есть
+\begin{cppcode}
+int x = 4; // OK
+ODetector<int> y = 4; // OK
+\end{cppcode}
+Теперь имплементация методов.
+В начале имплементация методов конвертации:
+\begin{cppcode}
+ODetector(T value) : value_(value) {}
+explicit constexpr operator T() const noexcept {
+  return value_;
+}
+\end{cppcode}
+Унарные операции:
+\begin{cppcode}
+ODetector operator+() const noexcept {
+  return *this;
+}
+ODetector operator-() const noexcept {
+  assert(!DoesUnaryMinusOverflow(value_));
+  return value_ * -1;
+}
+\end{cppcode}
+Арифметические операции, которые выполняются inplace:
+\begin{cppcode}
+ODetector& operator+=(ODetector other) noexcept {
+  assert(!DoesAdditionOverflow(value_, other.value_));
+  value_ += other.value_;
+  return *this;
+}
+ODetector& operator-=(ODetector other) noexcept {
+  assert(!DoesSubtractionOverflow(value_, other.value_));
+  value_ -= other.value_;
+  return *this;
+}
+ODetector& operator*=(ODetector other) noexcept {
+  assert(!DoesMultiplicationOverflow(value_, other.value_));
+  value_ *= other.value_;
+  return *this;
+}
+ODetector& operator/=(ODetector other) noexcept {
+  assert(!DoesDivisionOverflow(value_, other.value_));
+  value_ /= other.value_;
+  return *this;
+}
+\end{cppcode}
+Бинарные операции объявляются \verb"friend" для того, чтобы была конвертация по обоим аргументам:
+\begin{cppcode}
+friend ODetector operator+(ODetector lhs, ODetector rhs) noexcept {
+  lhs += rhs;
+  return lhs;
+}
+friend ODetector operator-(ODetector lhs, ODetector rhs) noexcept {
+  lhs -= rhs;
+  return lhs;
+}
+friend ODetector operator*(ODetector lhs, ODetector rhs) noexcept {
+  lhs *= rhs;
+  return lhs;
+}
+friend ODetector operator/(ODetector lhs, ODetector rhs) noexcept {
+  lhs /= rhs;
+  return lhs;
+}
+\end{cppcode}
+Операторы сравнения так же объявлены друзьями, чтобы допустить конвертацию по обоим аргументам:
+\begin{cppcode}
+friend bool operator==(ODetector lhs, ODetector rhs) noexcept {
+  return lhs.value_ == rhs.value_;
+}
+friend bool operator!=(ODetector lhs, ODetector rhs) noexcept {
+  return !(lhs == rhs);
+}
+friend bool operator<(ODetector lhs, ODetector rhs) noexcept {
+  return lhs.value_ < rhs.value_;
+}
+ friend bool operator>(ODetector lhs, ODetector rhs) noexcept {
+  return rhs < lhs;
+}
+friend bool operator<=(ODetector lhs, ODetector rhs) noexcept {
+  return !(rhs < lhs);
+}
+friend bool operator>=(ODetector lhs, ODetector rhs) noexcept {
+  return !(lhs < rhs);
+}
+\end{cppcode}
+Функции взятия максимального и минимального значения:
+\begin{cppcode}
+static constexpr T max() noexcept {
+  return std::numeric_limits<T>::max();
+}
+static constexpr T min() noexcept {
+  return std::numeric_limits<T>::min();
+}
+\end{cppcode}
+И теперь самое интересное -- методы проверки на переполнение:
+\begin{cppcode}
+static constexpr bool DoesUnaryMinusOverflow(T value) noexcept {
+  constexpr T offset = max() + min();
+  if (offset < 0 && value == min())
+    return true;
+  if (offset > 0 && value == max())
+    return true;
+  return false;
+}
+static constexpr bool DoesAdditionOverflow(T lhs, T rhs) noexcept {
+  if (rhs > 0 && (lhs > max() - rhs))
+    return true;
+  if (rhs < 0 && (lhs < min() - rhs))
+    return true;
+  return false;
+}
+static constexpr bool DoesSubtractionOverflow(T lhs, T rhs) noexcept {
+  if (rhs < 0 && (lhs > max() + rhs))
+    return true;
+  if (rhs > 0 && (lhs < min() + rhs))
+    return true;
+  return false;
+}
+static constexpr bool DoesMultiplicationOverflow(T lhs, T rhs) noexcept {
+  constexpr T offset = max() + min();
+  if (lhs == 0 || rhs == 0)
+    return false;
+  if (offset > 0) {
+    if ((rhs == -1 && lhs == max()) || (rhs == max() && lhs == -1))
+      return true;
+  } else if (offset < 0) {
+    if ((rhs == -1 && lhs == min()) || (rhs == min() && lhs == -1))
+      return true;
+  }
+  if (lhs < 0) {
+    if (rhs < 0) {
+      return lhs < max() / rhs;
+    } else {
+      return lhs < min() / rhs;
+    }
+  } else {
+    if (rhs < 0) {
+      return lhs > min() / rhs;
+    } else {
+      return lhs > max() / rhs;
+    }
+  }
+}
+static constexpr bool DoesDivisionOverflow(T lhs, T rhs) noexcept {
+  constexpr T offset = max() + min();
+  if (rhs == 0)
+    return true;
+  if (offset > 0) {
+    if ((lhs == -1 && rhs == max()) || (lhs == max() && rhs == -1))
+      return true;
+  } else if (offset < 0) {
+    if ((lhs == -1 && rhs == min()) || (lhs == min() && rhs == -1))
+      return true;
+  }
+  return false;
+}
+\end{cppcode}
