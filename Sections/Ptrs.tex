@@ -155,3 +155,1164 @@ private:
 Тут я не буду особенно повторяться, но reference semantics она контринтуитивная и с ней очень тяжело работать.
 С другой стороны value semantics is safe by default.
 \end{enumerate}
+
+\subsection{Еще немного о \texttt{shared\_ptr}}
+
+Я хочу отметить, что \verb"shared_ptr" -- это механизм совместного владения данными.
+И у этого механизма есть несколько настроек.
+
+\paragraph{Атомарность}
+
+Первая настройка -- является ли счетчик владения атомарным.
+А точнее являются ли автоматически генерируемые методы: дефолтный конструктор, копирующий и перемещающий конструктор, копирующее и перемещающее присваивание и деструктор, потокобезопасными.
+В таком языке как Rust есть возможность выбрать между этими двумя  настройками.
+В C++ решили не поддерживать не атомарный счетчик на уровне STL.
+Не уверен, что это хорошее решение.
+
+\paragraph{Small Object Optimization}
+
+Вторая настройка -- где и как хранить данные.
+Дело в том, что обычная имплементация \verb"shared_ptr" выделяет специальный объект \texttt{Control Block}, в котором хранится счетчик ссылок и указатель на данные.
+То есть для доступа к данным нужно сделать еще один прыжок по памяти.
+Однако, в случае объектом малого размера можно добавить Small Object Optimization, который бы позволял хранить данные непосредственно в \texttt{Control Block}.
+Вот так выглядят эти два подхода:
+\begin{center}{
+\newlength{\cbawidth}
+\settowidth{\cbawidth}{Control}
+\begin{tabular}{cc}
+{\textbf{Стандартное решение}}&{\textbf{Решение с SOO}}\\
+{
+\begin{minipage}[\baselineskip]{6cm}
+\[
+\xymatrix@R=10pt{
+  {\text{ptr}}\ar[r]
+  	{
+	\save
+   [].[]*[F-]\frm{}
+   \restore
+	}
+	    	{
+	\save
+   [].[]*+[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{\parbox{\cbawidth}{\centering Control Block}}
+      	{
+	\save
+   [].[dd]*+[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{}\\
+  {}
+  &{\text{counter}}
+    	{
+	\save
+   [].[]*[F-]\frm{}
+   \restore
+	}
+  &{}\\
+  {}
+  &{\text{ptr}}\ar[r]
+    	{
+	\save
+   [].[]*[F-]\frm{}
+   \restore
+	}
+  &{\text{data}}
+    	{
+	\save
+   [].[]*[F-]\frm{}
+   \restore
+	}\\
+}
+\]
+\end{minipage}
+}&{
+\begin{minipage}[\baselineskip]{6cm}
+\[
+\xymatrix@R=10pt{
+  {\text{ptr}}\ar[r]
+    	{
+	\save
+   [].[]*[F-]\frm{}
+   \restore
+	}
+	    	{
+	\save
+   [].[]*+[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{\parbox{\cbawidth}{\centering Control Block}}
+      	{
+	\save
+   [].[dd]*+[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{}\\
+  {}
+  &{\text{counter}}
+    	{
+	\save
+   [].[]*[F-]\frm{}
+   \restore
+	}
+  &{}\\
+  {}
+  &{\text{data}}
+    	{
+	\save
+   [].[]*[F-]\frm{}
+   \restore
+	}
+  &{}\\
+}
+\]
+\end{minipage}
+}\\
+\end{tabular}}
+\end{center}
+Скажу сразу, атомарность счетчика ссылок я сейчас обсуждать не хочу и не собираюсь.
+Дело в том, что написать правильно многопоточный код с механизмами синхронизации -- это отдельная непростая задача.
+И решать эту задачу можно по-разному.
+Потому я буду обсуждать только \textbf{потоко не безопасную}%
+\footnote{А если признаться честно, то я пока не готов вам рассказывать как правильно писать потокобезопасный \texttt{shared\_ptr}.
+Надеюсь когда-нибудь добавлю и эту информацию в текст.}
+имплементацию, потому что я хочу продемонстрировать другую.
+
+\paragraph{Дополнительный класс}
+
+Пользуясь принципом <<Люди носят недостаточное количество шляп>> (смотри раздел~\ref{section::NotEnoughHats}), я бы выделил под владение специальный объект -- \verb"Holder", который умеет владеть данными с поддержкой счетчика владения.
+И в этом случае надо имплементировать два вида владельцев -- для локального хранения и для хранения на куче.
+Логически картинка выше меняется на такую:
+\begin{center}
+\begin{tabular}{cc}
+{\textbf{Стандартное решение}}&{\textbf{Решение с SOO}}\\
+{
+\begin{minipage}[\baselineskip]{6cm}
+\[
+\xymatrix@R=10pt{
+  {\text{ptr}}\ar[r]
+    	{
+	\save
+   [].[]*[F-]\frm{}
+   \restore
+	}
+	    	{
+	\save
+   [].[]*+[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{\text{Control Block}}
+      	{
+	\save
+   [].[d]*+[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{}\\
+  {}
+  &{\text{HeapHolder}}
+      	{
+	\save
+   [].[]*[F-]\frm{}
+   \restore
+	}
+  &{}\\
+}
+\]
+\end{minipage}
+}&{
+\begin{minipage}[\baselineskip]{6cm}
+\[
+\xymatrix@R=10pt{
+  {\text{ptr}}\ar[r]
+    	{
+	\save
+   [].[]*[F-]\frm{}
+   \restore
+	}
+	    	{
+	\save
+   [].[]*+[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{\text{Control Block}}
+      	{
+	\save
+   [].[d]*+[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{}\\
+  {}
+  &{\text{LocalHolder}}
+      	{
+	\save
+   [].[]*[F-]\frm{}
+   \restore
+	}
+  &{}\\
+}
+\]
+\end{minipage}
+}\\
+\end{tabular}
+\end{center}
+Но на самом деле можно сделать еще лучше.
+Можно полностью избавиться от контрольного блока так:
+\begin{center}
+\begin{tabular}{cc}
+{\textbf{Стандартное решение}}&{\textbf{Решение с SOO}}\\
+{
+\begin{minipage}[\baselineskip]{6cm}
+\[
+\xymatrix@R=10pt{
+  {\text{ptr}}\ar[r]
+    	{
+	\save
+   [].[]*[F-]\frm{}
+   \restore
+	}
+	    	{
+	\save
+   [].[]*+[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{\text{LocalHolder}}
+      	{
+	\save
+   [].[d]*+[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{}\\
+  {}
+  &{\text{HeapHolder}}
+      	{
+	\save
+   [].[]*[F-]\frm{}
+   \restore
+	}
+  &{}\\
+}
+\]
+\end{minipage}
+}&{
+\begin{minipage}[\baselineskip]{6cm}
+\[
+\xymatrix@R=10pt{
+  {\text{ptr}}\ar[r]
+    	{
+	\save
+   [].[]*[F-]\frm{}
+   \restore
+	}
+	    	{
+	\save
+   [].[]*+[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{\text{LocalHolder}}
+      	{
+	\save
+   [].[d]*+[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{}\\
+  {}
+  &{\text{LocalHolder}}
+      	{
+	\save
+   [].[]*[F-]\frm{}
+   \restore
+	}
+  &{}\\
+}
+\]
+\end{minipage}
+}\\
+\end{tabular}
+\end{center}
+При этом внешний \verb"Holder" считает владельцами и \verb"shared_ptr" и \verb"weak_ptr".
+А внутренний \verb"Holder" считает владельцами только \verb"shared_ptr".
+
+\subsection{Владение со счетчиком}
+
+В этом разделе будет полезно увидеть разные приемы для работы с памятью на куче и локально рядом с объектом.
+Любой владелец внутри себя хранит данные и счетчик владения.
+Обеспечивается следующий инвариант:
+\begin{itemize}
+\item Счетчик владения больше нуля тогда и только тогда, когда владелец хранит данные.
+
+\item Счетчик владения ноль тогда и только тогда, когда он не хранит данные.
+\end{itemize}
+Любой владелец должен поддерживать следующие операции:
+\begin{enumerate}
+\item Сконструировать владельца пустым.
+
+\item Сконструировать владельца с помощью данных.
+
+\item Увеличить счетчик владения, если он не ноль.
+
+\item Уменьшить счетчик владения, если он положительный.
+
+\item Уничтожить объект владения и сбросить счетчик владения до нуля.
+
+\item Поместить новые данные. Тут может быть разное поведение у счетчика владения, но можно его например сбрасывать в $1$ (или сбрасывать в $1$, если он нулевой).
+
+\item Должны быть методы по получению доступа к данным по ссылке и указателю.
+
+\item Методы проверки количества владельцев и факта владения.
+
+\item Поддержка операций копирования и перемещения.
+Вот тут опционально.
+Для имплементации \verb"shared_ptr" достаточно удалить все копирующие и перемещающие операции.
+\end{enumerate}
+
+
+\subsubsection{Владение на куче}
+
+Давайте сразу начнем с описания в коде \verb"HeapHolder":
+\begin{cppcode}
+template<class T>
+class HeapHolder {
+public:
+  HeapHolder();
+  template<class... Args>
+  HeapHolder(Args&&... args);
+  HeapHolder(HeapHolder&); // Need this because of the previous ctor
+  HeapHolder(const HeapHolder&);
+  HeapHolder(HeapHolder&&) noexcept;
+  HeapHolder& operator=(const HeapHolder&);
+  HeapHolder& operator=(HeapHolder&&) noexcept;
+  ~HeapHolder() noexcept;
+
+  void acquire() noexcept;
+  void release() noexcept;
+  void reset() noexcept;
+  template<class... Args>
+  void emplace(Args&&... args);
+  
+  T* ptr() noexcept;
+  const T* ptr() const noexcept;
+  T& ref() noexcept;
+  const T& ref() const noexcept;
+  int counter() const noexcept;
+  bool has_value() const noexcept;
+  operator bool() const noexcept;
+
+private:
+  void destroy_data() noexcept;
+  
+  int counter_ = 0;
+  T* data_ = nullptr;
+};
+\end{cppcode}
+То есть внутри мы храним счетчик владения и указатель на данные.
+Мы поддерживаем следующие инварианты:
+\begin{itemize}
+\item \verb"counter_" всегда неотрицательный.
+
+\item \verb"counter_" равен $0$ тогда и только тогда, когда \verb"data_" равен \verb"nullptr".
+\end{itemize}
+
+\paragraph{Обеспечение семантики}
+
+Конструкторы и деструкторы:
+\begin{cppcode}
+HeapHolder() noexcept = default;
+template<class... Args>
+HeapHolder(Args&&... args)
+    : counter_(1), data_(new T(std::forward<Args>(args)...)) {
+}
+HeapHolder(HeapHolder& other) {
+  if (other.has_value()) {
+    data_ = new T(other.ref());
+    counter_ = other.counter_;
+  }
+}
+HeapHolder(const HeapHolder& other) {
+  if (other.has_value()) {
+    data_ = new T(other.ref());
+    counter_ = other.counter_;
+  }
+}
+HeapHolder(HeapHolder&& other) noexcept
+    : counter_(std::exchange(other.counter_, 0)),
+      data_(std::exchange(other.data_, nullptr)) {
+}
+HeapHolder& operator=(const HeapHolder& other) {
+  return *this = HeapHolder(other);
+}
+HeapHolder& operator=(HeapHolder&& other) noexcept {
+  HeapHolder tmp(std::move(other));
+  std::swap(counter_, tmp.counter_);
+  std::swap(data_, tmp.data_);
+  return *this;
+}
+~HeapHolder() noexcept {
+  reset();
+}
+\end{cppcode}
+Обратите внимание, что для копирования нужно определить версии конструкторов с аргументами:
+\begin{enumerate}
+\item \verb"const HeapHolder&".
+
+\item \verb"HeapHolder&".
+\end{enumerate}
+Это связано с тем, что если не определить вторую версию, то при копировании
+\begin{cppcode}
+HeapHolder<int> x;
+HeapHolder<int> y = x;
+\end{cppcode}
+будет вызван второй шаблонный конструктор, а не копирующий конструктор, так как он лучше подходит под сигнатуру \verb"x".
+Переменная \verb"x" не является константной и в этом проблема.
+
+\paragraph{Методы доступа к данным}
+
+Тут совсем просто.
+\begin{cppcode}
+T* ptr() noexcept {
+  return data_;
+}
+const T* ptr() const noexcept {
+  return data_;
+}
+T& ref() noexcept {
+  assert(counter_ > 0);
+  return *ptr();
+}
+const T& ref() const noexcept {
+  assert(counter_ > 0);
+  return *ptr();
+}
+int counter() const noexcept {
+  return counter_;
+}
+bool has_value() const noexcept {
+  return counter_ > 0;
+}
+operator bool() const noexcept {
+  return has_value();
+}
+\end{cppcode}
+Методы доступа по ссылке являются не безопасными.
+Потому для проверки, что этими методами можно пользоваться есть методы проверки, что данные во владельце лежат.
+
+\paragraph{Менеджмент ресурса}
+
+Тут просто имплементируем обещанный контракт:
+\begin{cppcode}
+void acquire() noexcept {
+  if (counter_ > 0)
+    ++counter_;
+}
+void release() noexcept {
+  if (counter_ <= 0)
+    return;
+  assert(counter_ > 0);
+  --counter_;
+  if (counter_ == 0) {
+    destroy_data();
+    data_ = nullptr;
+  }
+}
+void reset() noexcept {
+  if (counter_ > 0) {
+    destroy_data();
+    data_ = nullptr;
+    counter_ = 0;
+  }
+}
+template<class... Args>
+void emplace(Args&&... args) {
+  reset();
+  data_ = new T(std::forward<Args>(args)...);
+  counter_ = 1;
+}
+void destroy_data() noexcept {
+  data_->~T();
+}
+\end{cppcode}
+Давайте обратим внимание на некоторые особенности имплементации:
+\begin{enumerate}
+\item При захвате ресурса через \verb"acquire", мы увеличиваем счетчик ресурсов владения только если данные действительно лежат внутри.
+
+\item Я упомниал, что в методе \verb"emplace" можно по-разному имплементировать помещение новых данных во владельца.
+В данном решении выбран метод, когда мы сбрасываем все старые владения и просто кладем новые данные со счетчиком владения $1$.
+\end{enumerate}
+
+\subsubsection{Владение локально}
+% TO DO
+
+По сути локальный владелец -- это вариация на тему \verb"std::optional", только мы используем счетчик владения, а не просто флаг <<пуст>>/<<не пуст>>.
+
+\paragraph{Сырая память}
+
+Прежде всего надо сделать удобной и корректной работу с сырой память.
+Важно, что сырая память обладает двумя характеристиками:
+\begin{enumerate}
+\item Размер.
+Это просто размер куска памяти.
+
+\item Выравнивание.
+Это число, на которое делится адрес начала блока памяти.
+\end{enumerate}
+Логически с памятью мы можем сделать только две операции:
+\begin{enumerate}
+\item Выделить.
+
+\item Освободить.
+\end{enumerate}
+Никакого копирования или перемещения для памяти не существует.
+Это не имеющие смысла операции, потому что область памяти физически на уровне железа никуда не перемещается.
+Мы не будем закрывать блок памяти за каким-то сложным классом.
+Сделаем просто обычную голую структуру с правильным выравниванием так:
+\begin{cppcode}
+template<size_t size, size_t alignment>
+struct BlockImpl {
+  void* address() noexcept {
+    return buffer;
+  }
+  const void* address() const noexcept {
+    return buffer;
+  }
+  alignas(alignment) std::byte buffer[size];
+};
+
+template<class T>
+using Block = BlockImpl<sizeof(T), alignof(T)>;
+\end{cppcode}
+Просто будем всегда держать в голове, что память копировать и перемещать не имеет смысла.
+Так же обратите внимание, что я использую методы в структуре только для большей читаемости.
+
+\paragraph{Важное замечание}
+
+Я много раз видел имплементацию с использованием \verb"delete this".
+Но я хочу сказать, что это логически не верный подход.
+Дело в том, что в языке C++ есть понятие life-time-а у любого объекта.
+И потому вызов \verb"delete this" внутри метода объекта означает, что вы нарушаете логически время жизни объекта внутри его метода.
+Это очень сильно противоречит самой сути устройства C++.
+Конечно, можно написать код с этим трюком без UB, но где гарантия, что один чих при изменении стандарта, не превратит ваш код в мусор?
+Кроме того, нет никакой потребности в подобных штуках, если вы используете абстракцию для владения блоком памяти.
+Вы просто создаете или удаляете данные внутри этого блока.
+И эта операция логически отличается от операции создания и удаления самого блока памяти.
+
+\paragraph{Инварианты}
+
+В имплементации ниже мы поддерживаем следующие инварианты:
+\begin{itemize}
+\item \verb"counter_" равен $0$ тогда и только тогда, когда данные внутри \verb"data_" не аллоцированы.
+
+\item метод \verb"ptr" возвращает \verb"nullptr" тогда и только тогда, когда данные внутри \verb"data_" не аллоцированы.
+\end{itemize}
+
+\paragraph{\texttt{LocalHolder} в коде}
+
+Вот так выглядит определение класса:
+\begin{cppcode}
+template<class T>
+class LocalHolder {
+public:
+  LocalHolder() noexcept;
+  template<class... Args>
+  LocalHolder(Args&&... args);
+  LocalHolder(LocalHolder& other);
+  LocalHolder(const LocalHolder& other);
+  LocalHolder(LocalHolder&& other) noexcept;
+  LocalHolder& operator=(const LocalHolder& other);
+  LocalHolder& operator=(LocalHolder&& other) noexcept;
+  ~LocalHolder() noexcept;
+
+  void acquire() noexcept;
+  void release() noexcept;
+  void reset() noexcept;
+  template<class... Args>
+  void emplace(Args&&... args);
+
+
+  T* ptr() noexcept;
+  const T* ptr() const noexcept;
+  T& ref() noexcept;
+  const T& ref() const noexcept;
+  int counter() const noexcept;
+  bool has_value() const noexcept;
+  operator bool() const noexcept;
+
+private:
+  void destroy_data() noexcept;
+  template<class LH>
+  void move_from_different(LH&& other);
+  T* ptr_() noexcept;
+  
+  int counter_ = 0;
+  Block<T> data_;
+};
+\end{cppcode}
+Публичный интерфейс точно такой же как и у \verb"HeapHolder".
+А вот в приватных методах есть вспомогательный шаблон для копирования данных из источника отличного от \verb"this".
+И служебный метод получения указателя на данные.
+
+\paragraph{Обеспечение семантики класса}
+
+Конструкторы и деструкторы:
+\begin{cppcode}
+LocalHolder() noexcept = default;
+template<class... Args>
+LocalHolder(Args&&... args) : counter_(1) {
+  new (data_.address()) T(std::forward<Args>(args)...);
+}
+LocalHolder(LocalHolder& other) {
+  if (other.has_value()) {
+    new (data_.address()) T(other.ref());
+    counter_ = other.counter_;
+  }
+}
+LocalHolder(const LocalHolder& other) {
+  if (other.has_value()) {
+    new (data_.address()) T(other.ref());
+    counter_ = other.counter_;
+  }
+}
+LocalHolder(LocalHolder&& other) noexcept : counter_(other.counter_) {
+  if (other.counter_ > 0) {
+    new (data_.address()) T(std::move(other.ref()));
+    other.destroy_data();
+    other.counter_ = 0;
+  }
+}
+LocalHolder& operator=(const LocalHolder& other) {
+  move_from_different(LocalHolder(other));
+  return *this;
+}
+LocalHolder& operator=(LocalHolder&& other) noexcept {
+  LocalHolder tmp(std::move(other));
+  move_from_different(tmp);
+  return *this;
+}
+~LocalHolder() noexcept {
+  reset();
+}
+template<class LH>
+void move_from_different(LH&& other) noexcept {
+  if (has_value()) {
+    destroy_data();
+    counter_ = 0;
+  }
+  if (other.has_value()) {
+    new (data_.address()) T(std::move(other.ref()));
+    other.destroy_data();
+    counter_ = std::exchange(other.counter_, 0);
+  }
+}
+\end{cppcode}
+Несколько замечаний.
+\begin{enumerate}
+\item Для локального владельца мы используем \verb"in place" версии для оператора \verb"new", так как мы создаем объекты по адресу данных внутри блока памяти.
+\end{enumerate}
+
+\paragraph{Методы доступа}
+
+Тут все просто:
+\begin{cppcode}
+T* ptr_() noexcept {
+  return reinterpret_cast<T*>(data_.address());
+}
+T* ptr() noexcept {
+  if (counter_ == 0)
+    return nullptr;
+  return ptr_();
+}
+const T* ptr() const noexcept {
+  if (counter_ == 0)
+    return nullptr;
+  return ptr_()
+}
+T& ref() noexcept {
+  return *ptr();
+}
+const T& ref() const noexcept {
+  return *ptr();
+}
+int counter() const noexcept {
+  return counter_;
+}
+bool has_value() const noexcept {
+  return counter_ > 0;
+}
+operator bool() const noexcept {
+  return has_value();
+}
+\end{cppcode}
+Тут стоит обратить внимание на то, что публичный метод \verb"ptr" возвращает \verb"nullptr" в случае отсутствия данных.
+Это нужно для совместимости со случаем \verb"HeapHolder".
+
+\paragraph{Менеджмент ресуросв}
+
+Тут просто имплементируем заявленный контракт:
+\begin{cppcode}
+void acquire() noexcept {
+  if (counter_ > 0)
+    ++counter_;
+}
+void release() noexcept {
+  if (counter_ <= 0)
+    return;
+  --counter_;
+  if (counter_ == 0)
+    destroy_data();
+}
+void reset() noexcept {
+  if (counter_ > 0) {
+    destroy_data();
+    counter_ = 0;
+  }
+}
+template<class... Args>
+void emplace(Args&&... args) {
+  reset();
+  new (data_.address()) T(std::forward<Args>(args)...);
+  counter_ = 1;
+}
+void destroy_data() noexcept {
+  ptr_()->~T();
+}
+\end{cppcode}
+Замечания тут такие же, что и в случае \verb"HeapHolder".
+\begin{enumerate}
+\item При захвате ресурса через \verb"acquire", мы увеличиваем счетчик ресурсов владения только если данные действительно лежат внутри.
+
+\item Я упомниал, что в методе \verb"emplace" можно по-разному имплементировать помещение новых данных во владельца.
+В данном решении выбран метод, когда мы сбрасываем все старые владения и просто кладем новые данные со счетчиком владения $1$.
+\end{enumerate}
+
+\subsection{Имплементация \texttt{shared\_ptr} через \texttt{Holder}}
+% TO DO
+
+Напомню на всякий случай, что я НЕ обсуждаю сейчас потокобезопасный счетчик ссылок.
+Потому и \verb"Holder" будет не потокобезопасным.
+
+\subsubsection{Модификация \texttt{Holder} под \texttt{shared\_ptr}}
+
+Во избежание проблем и ошибок я бы убрал возможность копирования и перемещения для \verb"Holder"-ов.
+Так же я убрал бы дефолтный конструктор, так как для \verb"shared_ptr" \verb"Holder" не может быть пустым.
+И в этом случае методы для менеджмента ресурсов можно поправить так:
+\begin{cppcode}
+void acquire() noexcept {
+  assert(counter_ > 0);
+  ++counter_;
+}
+void release() noexcept {
+  assert(counter_ > 0);
+  --counter_;
+  if (counter_ == 0) {
+    destroy_data();
+    data_ = nullptr;
+  }
+}
+\end{cppcode}
+
+\subsubsection{Выбор нужного владельца}
+
+Выбор владельца можно осуществлять автоматически или по требованию пользователя.
+А можно совместить эти два метода.
+Если пользователь не указал ничего, то выбираем автоматически.
+А если он указал вид владельца, то используем его.
+В начале напишем автоматический выбор.
+Будем выбирать локальный \verb"Holder", если размер объекта не больше $4$ указателей.
+\begin{cppcode}
+template<class T>
+struct is_small_type {
+  static constexpr bool value = sizeof(T) <= sizeof(void*) * 4;
+};
+
+template<class T>
+constexpr bool is_small_type_v = is_small_type<T>::value;
+
+template<class T>
+struct AutoHolderImpl {
+  using type = Logic::IfElse<is_small_type_v<T>, LocalHolder<T>, HeapHolder<T>>;
+};
+
+template<class T>
+using AutoHolder = typename AutoHolderImpl<T>::type;
+\end{cppcode}
+Теперь как может выглядеть объявление класса \verb"shared_ptr".
+В начале зададим три вспомогательных класса, которые будут являться флагами для выбора типа владельца:
+\begin{cppcode}
+struct Auto;
+struct Local;
+struct OnHeap;
+\end{cppcode}
+Теперь нужен шаблон для выбора владельца по этим флагам:
+\begin{cppcode}
+template<class T, class Flag>
+struct ChooseHolderImpl {
+  static_assert(False<T>, "Unsupported type of Holder!");
+}
+
+template<class T>
+struct ChooseHolderImpl<Auto> {
+  using type = AutoHolder<T>;
+};
+
+template<class T>
+struct ChooseHolderImpl<Local> {
+  using type = LocalHolder<T>;
+};
+
+template<class T>
+struct ChooseHolderImpl<OnHeap> {
+  using type = HeapHolder<T>;
+};
+
+template<class T, class Flag>
+using ChooseHolder = typename ChooseHolder<T, Flag>::type;
+\end{cppcode}
+И теперь мы можем написать вот такое объявление \verb"shared_ptr":
+\begin{cppcode}
+template<class T, class HolderType = Auto>
+class SharedPtr {
+  using Holder = ChooseHolder<T, HolderType>;
+  ...
+};
+\end{cppcode}
+И использование может быть следующим:
+\begin{cppcode}
+SharedPtr<int> ptr0;         // LocalHolder
+SharedPtr<int, Local> ptr1;  // LocalHolder
+SharedPtr<int, OnHeap> ptr2; // HeapHolder
+\end{cppcode}
+
+\subsubsection{Имплементация \texttt{shared\_ptr}}
+
+\paragraph{Никаких контрольных блоков}
+
+На имплементацию \verb"shared_ptr" и \verb"weak_ptr" можно смотреть так: есть общий блок с памятью, где лежат данные -- им владеют оба вида указателей.
+А внутри этого блока с памятью лежат данные, которыми владеют только \verb"shared_ptr".
+Потому такую конструкцию можно имплементировать через два вложенных \verb"Holder"-а.
+А именно
+\begin{cppcode}
+template<class T, class HolderType = Auto>
+class SharedPtr {
+  using Holder = ChooseHolder<T, HolderType>;
+  using BlockHolder = LocalHolder<Holder>;
+public:
+  ...
+private:
+  BlockHolder* block_ptr_;
+};
+
+template<class T, class HolderType = Auto>
+class WeakPtr {
+  using Holder = ChooseHolder<T, HolderType>;
+  using BlockHolder = LocalHolder<Holder>;
+public:
+  ...
+private:
+  BlockHolder* block_ptr_;
+};
+\end{cppcode}
+Классы \verb"SharedPtr" и \verb"WeakPtr" владеют одновременно данными по указателю на \verb"BlockHolder", который обеспечивает владение данными со счетчиком.
+И этот счетчик используется для обоих классов.
+Внутри в качестве данных лежит \verb"Holder", который уже хранит данные типа \verb"T" и поддерживает счетчик владения только для \verb"SharedPtr".
+Главный недостаток такого решения -- для совместного владения надо большую разрядность счетчика.
+Из плюсов, не надо мучиться с менеджментом ресурсов напрямую.
+Большую часть работы выполнят владеющие объекты.
+В данной имплементации поддерживается инвариант
+\begin{itemize}
+\item Если \verb"block_ptr_" не равен \verb"nullptr", то гарантируется, что \verb"block_ptr_->counter()" больше нуля.
+То есть если память выделена под общий блок, то есть хотя бы один владелец.
+\end{itemize}
+
+\paragraph{Класс \texttt{SharedPtr}}
+
+Определение класса выглядит так:
+\begin{cppcode}
+template<class T, class HolderType = Auto>
+class SharedPtr {
+  using Holder = ChooseHolder<T, HolderType>;
+  using BlockHolder = LocalHolder<Holder>;
+  
+  friend struct MakeShared<T, HolderType>;
+  friend class WeakPtr<T, HolderType>;
+
+  SharedPtr(BlockHolder* block_ptr) noexcept;  // only for MakeShared<T, HolderType>
+
+public:
+  SharedPtr() noexcept;
+  template<class... Args>
+  SharedPtr(Args&&... args);
+  SharedPtr(SharedPtr& other) noexcept;
+  SharedPtr(const SharedPtr& other) noexcept;
+  SharedPtr(SharedPtr&& other) noexcept;
+  SharedPtr& operator=(const SharedPtr& other) noexcept;
+  SharedPtr& operator=(SharedPtr&& other) noexcept;
+  ~SharedPtr() noexcept;
+
+  T* operator->() const noexcept;
+  T& operator*() const noexcept;
+  int holders() const noexcept;
+  int refs() const noexcept;
+  bool empty() const noexcept;
+  operator bool() const noexcept;
+  void release() noexcept;
+
+private:
+  Holder* data_holder();
+  const Holder* data_holder() const;
+
+  BlockHolder* block_ptr_;
+};
+\end{cppcode}
+
+\paragraph{Обеспечение семантики класса}
+
+Конструкторы и деструкторы:
+\begin{cppcode}
+SharedPtr(BlockHolder* block_ptr) noexcept : block_ptr_(block_ptr) {
+}
+// public ctors
+SharedPtr() noexcept = default;
+template<class... Args>
+SharedPtr(Args&&... args)
+    : block_ptr_(new BlockHolder{std::forward<Args>(args)...}) {
+}
+SharedPtr(SharedPtr& other) noexcept : block_ptr_(other.block_ptr_) {
+  if (block_ptr_) {
+    block_ptr_->acquire();
+    data_holder()->acquire();
+  }
+}
+SharedPtr(const SharedPtr& other) noexcept : block_ptr_(other.block_ptr_) {
+  if (block_ptr_) {
+    block_ptr_->acquire();
+    data_holder()->acquire();
+  }
+}
+SharedPtr(SharedPtr&& other) noexcept
+    : block_ptr_(std::exchange(other.block_ptr_, nullptr)) {
+}
+SharedPtr& operator=(const SharedPtr& other) noexcept {
+  return *this = SharedPtr(other);
+}
+SharedPtr& operator=(SharedPtr&& other) noexcept {
+  SharedPtr tmp(std::move(other));
+  std::swap(block_ptr_, tmp.block_ptr_);
+  return *this;
+}
+~SharedPtr() noexcept {
+  release();
+}
+\end{cppcode}
+Обратите внимание на двойное захватывание ресурсов в конструкторах.
+А также ниже будет двойное освобождение ресурсов в методе \verb"release".
+Напомню, что это связано с тем, что внешний счетчик считает общее количество владельцев \verb"block_ptr_".
+Так же я тут не поддерживаю всякие методы по конвертации одного \verb"SharedPtr" к другому.
+Например, если \verb"SharedPtr" отличаются друг от друга методом хранения данных (локально или на куче) или если у них разный тип данных для хранения и нужно сделать конвертацию.
+
+\paragraph{Интерфейс \texttt{SharedPtr}}
+
+Имплементировать интерфейс можно так:
+\begin{cppcode}
+T* operator->() const noexcept {
+  if (!block_ptr_)
+    return nullptr;
+  return data_holder()->ptr();
+}
+T& operator*() const noexcept {
+  return *operator->();
+}
+int holders() const noexcept {
+  if (!block_ptr_)
+    return 0;
+  return data_holder()->counter();
+}
+int refs() const noexcept {
+  if (!block_ptr_)
+    return 0;
+  return block_ptr_->counter() - data_holder()->counter();
+}
+bool empty() const noexcept {
+  return holders() == 0;
+}
+operator bool() const noexcept {
+  return !empty();
+}
+void release() noexcept {
+  if (empty())
+    return;
+  data_holder()->release();
+  block_ptr_->release();
+  if (block_ptr_->counter() == 0) {
+    delete block_ptr_;
+  }
+  block_ptr_ = nullptr;
+}
+Holder* data_holder() {
+  return block_ptr_->ptr();
+}
+const Holder* data_holder() const {
+  return block_ptr_->ptr();
+}
+\end{cppcode}
+Небольшое методологическое замечание.
+В методе \verb"refs" написано
+\begin{cppcode}[numbers = none]
+return block_ptr_->counter() - data_holder()->counter();
+\end{cppcode}
+Однако можно было бы
+\begin{cppcode}[numbers = none]
+return block_ptr_->counter() - holders();
+\end{cppcode}
+Причина выбора первого подхода связана с тем, что в первом случае код написан на одном уровне абстракции.
+Во втором случае первый вызов -- это обращение к методу члена класса, а второй вызов -- обращение к методу класса.
+Аналогично, обращение к внутренним данных делается через вспомогательный метод \verb"data_holder", чтобы избежать вот такого безобразия
+\begin{cppcode}[numbers = none]
+block_ptr_->ptr()->counter();
+// instead of
+data_holder()->counter();
+\end{cppcode}
+Плюс имя метода дает возможность понять, а что именно лежит по соответствующему указателю, а именно внутри лежит владелец уже основных данных.
+
+\paragraph{Метод \texttt{MakeShared}}
+
+Обратите внимание, что \verb"MakeShared" внезапно является классом.
+Это связано с тем, что я хочу сделать для \verb"ShatedPtr<T>" другом только версию, где класс \verb"T" такой же.
+Но нельзя сделать для класса другом только часть специализаций какой-то функции.
+Потому нужно разделить эти аргументы на части так: В начале зафиксируем \verb"T" как контекст во вспомогательной структуре, а потом внутри объявим статическую функцию, которая уже собирает аргументы.
+\begin{cppcode}
+template<class T, class HolderType = Auto>
+struct MakeShared {
+  using Holder = ChooseHolder<HolderType>;
+  using BlockHolder = LocalHolder<Holder>;
+  
+  template<class... Args>
+  static SharedPtr<T, HolderType> Of(Args&&...) {
+    return SharedPtr<T, HolderType>(new BlockHolder{std::forward<Args>(args)...});
+  }
+};
+\end{cppcode}
+И теперь надо добавить удобную функцию для создания \verb"SharedPtr" так:
+\begin{cppcode}
+template<class T, class HolderType, class... Args>
+SharedPtr<T, HolderType> makeShared(Args&&... args) {
+  return MakeShared<T, HolderType>::Of(std::forward<Args>(args)...);
+}
+\end{cppcode}
+В этом случае вызов будет сделан следующим образом
+\begin{cppcode}
+auto ptr0 = makeShared<int, Local>(1);
+auto ptr1 = makeShared<A, Auto>();
+\end{cppcode}
+Единственны недостаток, тут нельзя не объявить способ аллокации: локально, на куче или автоматический выбор.
+Для этого придется делать отдельную функцию с отдельным именем.
+
+\paragraph{Имплементация \texttt{WeakPtr}}
+
+Начнем с определения класса:
+\begin{cppcode}
+template<class T, class HolderType = Auto>
+class WeakPtr {
+  using Holder = ChooseHolder<T, HolderType>;
+  using BlockHolder = LocalHolder<Holder>;
+
+public:
+  WeakPtr() noexcept;
+  WeakPtr(const SharedPtr<T, HolderType>& other) noexcept;
+  WeakPtr(const WeakPtr& other) noexcept;
+  WeakPtr(WeakPtr&& other) noexcept;
+  WeakPtr& operator=(const WeakPtr& other) noexcept;
+  WeakPtr& operator=(WeakPtr&& other) noexcept;
+  ~WeakPtr() noexcept;
+
+  T* operator->() const noexcept;
+  T& operator*() const noexcept;
+  int holders() const noexcept;
+  int refs() const noexcept;
+  bool empty() const noexcept;
+  operator bool() const noexcept;
+
+private:
+  Holder* data_holder();
+  const Holder* data_holder() const;
+  
+  BlockHolder* block_ptr_ = nullptr;
+};
+\end{cppcode}
+Напомню, что контрольный блок находится в совместном владении \verb"SharedPtr" и \verb"WeakPtr".
+Так же отмечу, что в моей имплементации \verb"WeakPtr" имеет метод доступа к данным по указателю и по ссылке.
+Это связано с тем, что если мы не заботимся о потокобезопасности, то нет необходимости захватывать \verb"WeakPtr" до \verb"SharedPtr".
+Достаточно проверить пустой или нет \verb"WeakPtr", а уже после этого получить доступ.
+Если же мы ориентируемся на многопоточность.
+То мы не можем гарантировать, что объект жив, пока мы получаем доступ через \verb"WeakPtr".
+В этом случае его надо попытаться захватить до \verb"SharedPtr" в начале.
+
+\paragraph{Обеспечение семантики класса}
+
+Конструкторы и деструкторы:
+\begin{cppcode}
+WeakPtr() noexcept = default;
+WeakPtr(const SharedPtr<T, HolderType>& other) noexcept : block_ptr_(other.block_ptr_) {
+  if (block_ptr_)
+    block_ptr_->acquire();
+}
+WeakPtr(const WeakPtr& other) noexcept : block_ptr_(other.block_ptr_) {
+  if (block_ptr_)
+    block_ptr_->acquire();
+}
+WeakPtr(WeakPtr&& other) noexcept
+    : block_ptr_(std::exchange(other.block_ptr_, nullptr)) {
+}
+WeakPtr& operator=(const WeakPtr& other) noexcept {
+  return *this = WeakPtr(other);
+}
+WeakPtr& operator=(WeakPtr&& other) noexcept {
+  WeakPtr tmp(std::move(other));
+  std::swap(block_ptr_, tmp.block_ptr_);
+  return *this;
+}
+~WeakPtr() noexcept {
+  if (!block_ptr_)
+    return;
+  block_ptr_->release();
+  if (block_ptr_->counter() == 0)
+    delete block_ptr_;
+}
+\end{cppcode}
+В случае \verb"WeakPtr" надо захватывать и отпускать владение только внешнего \verb"Holder"-а.
+
+\paragraph{Методы \texttt{WeakPtr}}
+
+Тут все прямолинейно:
+\begin{cppcode}
+T* operator->() const noexcept {
+  if (empty())
+    return nullptr;
+  return data_holder()->ptr();
+}
+T& operator*() const noexcept {
+  return *operator->();
+}
+int holders() const noexcept {
+  if (!block_ptr_)
+    return 0;
+  return data_holder()->counter();
+}
+int refs() const noexcept {
+  if (!block_ptr_)
+    return 0;
+  return block_ptr_->counter() - holders();
+}
+bool empty() const noexcept {
+  return !(block_ptr_);
+}
+operator bool() const noexcept {
+  return !empty();
+}
+Holder* data_holder() {
+  return block_ptr_->ptr();
+}
+const Holder* data_holder() const {
+  return block_ptr_->ptr();
+}
+\end{cppcode}
+
+
