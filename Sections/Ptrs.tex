@@ -1299,7 +1299,7 @@ int holders() const noexcept {
 int refs() const noexcept {
   if (!block_ptr_)
     return 0;
-  return block_ptr_->counter() - holders();
+  return block_ptr_->counter() - data_holder()->counter();
 }
 bool empty() const noexcept {
   return !(block_ptr_);
