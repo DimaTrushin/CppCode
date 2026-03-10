@@ -1,0 +1,399 @@
+\ProvidesFile{LocalityCode.tex}[Код для раздела Полиморфизм и локальность]
+
+
+\newcommand{\codewidth}{5cm}
+
+\newsavebox\funch
+\begin{lrbox}{\funch}%
+\begin{minipage}[\baselineskip]{\codewidth}
+\texttt{function.h}
+\begin{cppcode}[numbers = none]
+#pragma once
+#include "A.h"
+
+
+void func(A&);
+
+\end{cppcode}
+\end{minipage}%
+\end{lrbox}
+
+\newsavebox\funccpp
+\begin{lrbox}{\funccpp}%
+\begin{minipage}[\baselineskip]{\codewidth}
+\texttt{function.cpp}
+\begin{cppcode}[numbers = none]
+#include "function.h"
+
+#include <iostream>
+
+void func(A& a) {
+  int x = a.f();
+  int y = a.g(x);
+  std::cout << y;
+}
+\end{cppcode}
+\end{minipage}%
+\end{lrbox}
+
+\newsavebox\funcha
+\begin{lrbox}{\funcha}%
+\begin{minipage}[\baselineskip]{\codewidth}
+\texttt{function.h}
+\begin{cppcode}[numbers = none]
+#pragma once
+#include "???.h"
+
+
+void func(???&);
+
+\end{cppcode}
+\end{minipage}%
+\end{lrbox}
+
+\newsavebox\funccppa
+\begin{lrbox}{\funccppa}%
+\begin{minipage}[\baselineskip]{\codewidth}
+\texttt{function.cpp}
+\begin{cppcode}[numbers = none]
+#include "function.h"
+
+#include <iostream>
+
+
+void func(???& a) {
+  int x = a.f();
+  int y = a.g(x);
+  std::cout << y;
+}
+
+\end{cppcode}
+\end{minipage}%
+\end{lrbox}
+
+\newsavebox\funchb
+\begin{lrbox}{\funchb}%
+\begin{minipage}[\baselineskip]{\codewidth}
+\texttt{function.h}
+\begin{cppcode}[numbers = none]
+#pragma once
+#include "I.h"
+
+
+void func(I&);
+
+\end{cppcode}
+\end{minipage}%
+\end{lrbox}
+
+\newsavebox\funccppb
+\begin{lrbox}{\funccppb}%
+\begin{minipage}[\baselineskip]{\codewidth}
+\texttt{function.cpp}
+\begin{cppcode}[numbers = none]
+#include "function.h"
+
+#include <iostream>
+
+void func(I& a) {
+  int x = a.f();
+  int y = a.g(x);
+  std::cout << y;
+}
+\end{cppcode}
+\end{minipage}%
+\end{lrbox}
+
+\newsavebox\funccppc
+\begin{lrbox}{\funccppc}%
+\begin{minipage}[\baselineskip]{\codewidth}
+\texttt{function.cpp}
+\begin{cppcode}[numbers = none]
+#include "function.h"
+
+#include <iostream>
+
+
+void func(I& a) {
+  int x = a.f();
+  int y = a.g(x);
+  std::cout << y;
+}
+
+\end{cppcode}
+\end{minipage}%
+\end{lrbox}
+
+\newsavebox\main
+\begin{lrbox}{\main}%
+\begin{minipage}[\baselineskip]{\codewidth}
+\texttt{main.cpp}
+\begin{cppcode}[numbers = none]
+#include "function.h"
+
+int main() {
+  A a;
+  func(a);
+  A b;
+  func(b);
+  return 0;
+}
+\end{cppcode}
+\end{minipage}%
+\end{lrbox}
+
+\newsavebox\maina
+\begin{lrbox}{\maina}%
+\begin{minipage}[\baselineskip]{\codewidth}
+\texttt{main.cpp}
+\begin{cppcode}[numbers = none]
+#include "function.h"
+#include "A.h"
+#include "B.h"
+
+int main() {
+  A a;
+  func(a);
+  B b;
+  func(b);
+  return 0;
+}
+\end{cppcode}
+\end{minipage}%
+\end{lrbox}
+
+\newsavebox\mainb
+\begin{lrbox}{\mainb}%
+\begin{minipage}[\baselineskip]{\codewidth}
+\texttt{main.cpp}
+\begin{cppcode}[numbers = none]
+#include "function.h"
+#include "A.h"
+#include "BI.h"
+
+int main() {
+  A a;
+  func(a);
+  B b;
+  BI bi = BI{&b};
+  func(bi);
+}
+\end{cppcode}
+\end{minipage}%
+\end{lrbox}
+
+\newsavebox\mainc
+\begin{lrbox}{\mainc}%
+\begin{minipage}[\baselineskip]{\codewidth}
+\texttt{main.cpp}
+\begin{cppcode}[numbers = none]
+#include "function.h"
+
+int main() {
+  A a;
+  func(a);
+  A b;
+  func(b);
+  return 0;
+}
+\end{cppcode}
+\end{minipage}%
+\end{lrbox}
+
+\newsavebox\classAh
+\begin{lrbox}{\classAh}%
+\begin{minipage}[\baselineskip]{\codewidth}
+\texttt{A.h}
+\begin{cppcode}[numbers = none]
+#pragma once
+
+struct A {
+  int f() const;
+  int g(int) const;
+};
+\end{cppcode}
+\end{minipage}%
+\end{lrbox}
+
+\newsavebox\classAcpp
+\begin{lrbox}{\classAcpp}%
+\begin{minipage}[\baselineskip]{\codewidth}
+\texttt{A.cpp}
+\begin{cppcode}[numbers = none]
+#include "A.h"
+
+int A::f() const {
+  return /*something*/;
+}
+
+int A::g(int x) const {
+  return /*something of x*/;
+}
+\end{cppcode}
+\end{minipage}%
+\end{lrbox}
+
+\newsavebox\classBh
+\begin{lrbox}{\classBh}%
+\begin{minipage}[\baselineskip]{\codewidth}
+\texttt{B.h}
+\begin{cppcode}[numbers = none]
+#pragma once
+
+struct B {
+  int f() const;
+  int g(int) const;
+};
+\end{cppcode}
+\end{minipage}%
+\end{lrbox}
+
+\newsavebox\classBcpp
+\begin{lrbox}{\classBcpp}%
+\begin{minipage}[\baselineskip]{\codewidth}
+\texttt{B.cpp}
+\begin{cppcode}[numbers = none]
+#include "B.h"
+
+int B::f() const {
+  return /*something*/;
+}
+
+int B::g(int x) const {
+  return /*something of x*/;
+}
+\end{cppcode}
+\end{minipage}%
+\end{lrbox}
+
+\newsavebox\classIh
+\begin{lrbox}{\classIh}%
+\begin{minipage}[\baselineskip]{\codewidth}
+\texttt{I.h}
+\begin{cppcode}[numbers = none]
+#pragma once
+
+struct I {
+  int f() const;
+  int g(int) const;
+};
+\end{cppcode}
+\end{minipage}%
+\end{lrbox}
+
+\newsavebox\classAIh
+\begin{lrbox}{\classAIh}%
+\begin{minipage}[\baselineskip]{\codewidth}
+\texttt{A.h}
+\begin{cppcode}[numbers = none]
+#pragma once
+
+struct A : I {
+  int f() const override;
+  int g(int) const override;
+};
+\end{cppcode}
+\end{minipage}%
+\end{lrbox}
+
+\newsavebox\classAIcpp
+\begin{lrbox}{\classAIcpp}%
+\begin{minipage}[\baselineskip]{\codewidth}
+\texttt{A.cpp}
+\begin{cppcode}[numbers = none]
+#include "A.h"
+
+int A::f() const {
+  return /*something*/;
+}
+
+int A::g(int x) const {
+  return /*something of x*/;
+}
+\end{cppcode}
+\end{minipage}%
+\end{lrbox}
+
+\newsavebox\classBIh
+\begin{lrbox}{\classBIh}%
+\begin{minipage}[\baselineskip]{\codewidth}
+\texttt{B.h}
+\begin{cppcode}[numbers = none]
+#pragma once
+
+struct B : I {
+  int f() const override;
+  int g(int) const override;
+};
+\end{cppcode}
+\end{minipage}%
+\end{lrbox}
+
+\newsavebox\classBIcpp
+\begin{lrbox}{\classBIcpp}%
+\begin{minipage}[\baselineskip]{\codewidth}
+\texttt{B.cpp}
+\begin{cppcode}[numbers = none]
+#include "B.h"
+
+int B::f() const {
+  return /*something*/;
+}
+
+int B::g(int x) const {
+  return /*something of x*/;
+}
+\end{cppcode}
+\end{minipage}%
+\end{lrbox}
+
+\newsavebox\classIVh
+\begin{lrbox}{\classIVh}%
+\begin{minipage}[\baselineskip]{\codewidth+0.5cm}
+\texttt{I.h}
+\begin{cppcode}[numbers = none]
+#pragma once
+
+struct I {
+  virtual int f() const = 0;
+  virtual int g(int) const = 0;
+};
+\end{cppcode}
+\end{minipage}%
+\end{lrbox}
+
+\newsavebox\classBIAh
+\begin{lrbox}{\classBIAh}%
+\begin{minipage}[\baselineskip]{\codewidth}
+\texttt{BI.h}
+\begin{cppcode}[numbers = none]
+#pragma once
+#include "I.h"
+#include "B.h"
+
+struct BI : I {
+  int f() const override;
+  int g(int) const override;
+  B* b;
+};
+\end{cppcode}
+\end{minipage}%
+\end{lrbox}
+
+\newsavebox\classBIAcpp
+\begin{lrbox}{\classBIAcpp}%
+\begin{minipage}[\baselineskip]{\codewidth}
+\texttt{BI.cpp}
+\begin{cppcode}[numbers = none]
+#include "BI.h"
+
+int B::f() const {
+  return b->f();
+}
+
+int B::g(int x) const {
+  return b->g(x);
+}
+\end{cppcode}
+\end{minipage}%
+\end{lrbox}
