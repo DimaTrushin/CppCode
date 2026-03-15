@@ -813,7 +813,7 @@ void move_from_different(LH&& other) noexcept {
 Тут все просто:
 \begin{cppcode}
 T* ptr_() noexcept {
-  return reinterpret_cast<T*>(data_.address());
+  return std::launder(reinterpret_cast<T*>(data_.address()));
 }
 T* ptr() noexcept {
   if (counter_ == 0)
