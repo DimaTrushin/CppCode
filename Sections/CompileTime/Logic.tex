@@ -123,9 +123,8 @@ const auto z = x; // decltype(z) = const int
 \subsubsection{Базовые связки}
 
 Теперь нужно научиться манипулировать логическими переменными.
-Выше мы уже использовали связку \verb"IfElse", чтобы выбрать тип в зависимости от условия.
+Например нам может понадобиться связка \verb"IfElse", чтобы выбрать тип в зависимости от условия.
 Данная деятельность не является необходимой, но я хочу уйти от ужасного синтаксиса STL и дополнительно добавлю недостающие связки.
-Связка \verb"IfElse" приведена повторно для полноты картины этого блока.
 
 \paragraph{Значения и классы-wrapper-ы}
 
@@ -342,13 +341,16 @@ template<class... Ts>
 constexpr bool areSame = areSame_t<Ts...>::value;
 \end{cppcode}
 Так же определяю связки:
+\begin{multicols}{2}
 \begin{enumerate}
-\item isLess
-\item isNotLess,
-\item isGreater
-\item isNotGreater
-\item isEqual
+\item \verb"isLess"
+\item \verb"isNotLess"
+\item \verb"isGreater"
+\item \verb"isNotGreater"
+\item \verb"isEqual"
+\item[]
 \end{enumerate}
+\end{multicols}
 Приведу имплементацию двух связок.
 Первая -- строгое сравнение \verb"isLess":
 \begin{cppcode}

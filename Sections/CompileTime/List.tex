@@ -1302,3 +1302,203 @@ using MakeList_u = typename MakeList_w<WBegin, WEnd, WStep>::type;
 \end{cppcode}
 Я следую логике, что если шаблон принимает класс-wrapper хотя бы в одном аргументе, то он принимает их во всех аргументах.
 При этом обратите внимание, что мы добавили проверку на корректность типов для классов-wrapper-ов.
+
+\subsection{Вывод на экран содержимого списка}
+
+Здесь мы продолжим идеи из раздела~\ref{section::ErrorPrint}.
+Мы все так же будем сообщать пользователю содержимое списка с помощью ошибок компиляции.
+Предположим, что мы хотим вывести список
+\begin{cppcode}
+namespace SomeLongName {
+  template<class...>
+  struct List {};
+  
+  TD<List<int, double>> x;
+}
+\end{cppcode}
+В этом случае в выводе мы увидим:
+\begin{cppcode}
+implicit instantiation of undefined template 'TD<SomeLongName::List<int, double>>'
+\end{cppcode}
+Хотелось бы убрать длинное имя для пространства имен для более удобного чтения вывода.
+Это можно сделать так.
+Заведем глобально (это очень плохая идея я понимаю) одно имя для списка, которое бы мы хотели иметь.
+И просто заменим имя списка на глобальное.
+\begin{cppcode}
+template<class>
+struct Out;
+
+template<auto...>
+struct Seq {};
+
+template<class...>
+struct List {};
+
+namespace ext {
+template<class T>
+struct PrintTImpl : ::Out<ReName<T>> {};
+
+template<class T>
+constexpr PrintTImpl<T> PrintT;
+
+namespace SomeLongName {
+  template<class...>
+  struct List {};
+  
+  ext::PrintT<List<int, double>>;
+}
+\end{cppcode}
+Я заменил часть названий на более приятные для глаза.
+Шаблон \verb"Out" нам нужен как принтер, через его имя мы будем выводить пользователю сообщение.
+Шаблон \verb"List" нужен как новое имя для шаблона используемого для обозначения списка.
+Мы будем подменять на него имя другого списка с длинным префиксом из пространств имен.
+Кроме того, для печати списка элементов, мы заводим глобальный шаблон \verb"Seq".
+Теперь давайте проанализируем как выглядит имплементация \verb"ReName".
+\begin{cppcode}
+namespace ext {
+template<class T>
+struct ReNameImpl : Type_t<T> {};
+
+template<template<class U, U...> class List, class T, T E1, T... Es>
+struct ReNameImpl<List<T, E1, Es...>> : Type_t<::Seq<E1, Es...>> {}; // List is NON empty!
+
+template<template<auto...> class List, auto... Es>
+struct ReNameImpl<List<Es...>> : Type_t<::Seq<Es...>> {};
+
+template<template<class...> class List, class... Ts>
+struct ReNameImpl<List<Ts...>> : Type_t<::List<Ts...>> {};
+
+template<class T>
+using ReName = typename ReNameImpl<T>::type;
+} // namespace ext
+
+namespace SomeLongName {
+  template<class...>
+  struct List {};
+  
+  ext::PrintT<List<int, double>>;
+}
+\end{cppcode}
+Обратите внимание, чтобы обратиться к глобальному \verb"List" используется явный квалификатор глобального пространства имен \verb"::List".
+Это нужно, потому что \verb"List" может быть определено в локальном пространстве имен и без явного доступа будет выбран не тот шаблон, который мы хотим.
+Так же нужно отметить, что специализация для списка элементов фиксированного типа требует не пустоты.
+Это связано с тем, что иначе для пустого списка у нас получается тип вида \verb"List<T>", что невозможно отличить от списка типов содержащего один элемент.
+
+Теперь вывод будет более приятным:
+\begin{cppcode}
+implicit instantiation of undefined template 'Out<List<int, double>>'
+\end{cppcode}
+Однако, если мы сделаем вложенные списки, то проблема вернется:
+\begin{cppcode}
+namespace SomeLongName {
+  template<class...>
+  struct List {};
+  
+  ext::PrintT<List<int, double, List<char, int>>>;
+}
+\end{cppcode}
+Вывод будет
+\begin{cppcode}
+implicit instantiation of undefined template
+'Out<List<int, double, SomeLongName::List<char, int>>>'
+\end{cppcode}
+Для исправления этого дефекта, нужно запустить чистку имен рекурсивно:
+\begin{cppcode}
+template<template<class...> class List, class... Ts>
+struct ReNameImpl<List<Ts...>> : Type_t<::List<ReName<Ts>...>> {};
+\end{cppcode}
+Вот теперь будет выглядеть хорошо:
+\begin{cppcode}
+implicit instantiation of undefined template 'Out<List<int, double, List<char, int>>>'
+\end{cppcode}
+Однако, появляется другой дефект.
+Мы же заменяем на глобальный \verb"List" вообще любой шаблонный тип без разбору.
+Давайте сделаем так:
+\begin{cppcode}
+namespace SomeLongName {
+  template<class...>
+  struct List {};
+  
+  ext::PrintT<List<int, double, List<char, int>, std::vector<int>>>;
+}
+\end{cppcode}
+Внезапно вывод будет
+\begin{cppcode}
+implicit instantiation of undefined template
+'Out<List<int, double, List<char, int>, List<int, List<int>>>>'
+\end{cppcode}
+вместо
+\begin{cppcode}
+implicit instantiation of undefined template
+'Out<List<int, double, List<char, int>, std::vector<int, std::allocator<int>>>>'
+\end{cppcode}
+Так получается, потому что мы чистим все списки типов без разбору.
+Одним из решений этой проблемы может быть такое: давайте запомним тип самого внешнего списка, и в последствии будем менять только его.
+Для этого нам понадобится метод подмены имени списка с условием.
+Для удобства ссылки шаблона на себя в  начале выделим:
+\begin{cppcode}
+template<class T, template<class...> class L>
+struct ReNameIfImpl;
+
+template<class T, template<class...> class L>
+using ReNameIf = typename ReNameIfImpl<T, L>::type;
+\end{cppcode}
+А теперь сама имплементация:
+\begin{cppcode}
+template<class T, template<class...> class L>
+struct ReNameIfImpl : Type_t<T> {};
+
+template<template<class...> class L, template<class U, U...> class List, class T, T E1, T... Es>
+struct ReNameIfImpl<List<T, E1, Es...>, L> : Type_t<::Seq<E1, Es...>> {}; // List is NON empty!
+
+template<template<class...> class L, template<auto...> class List, auto... Es>
+struct ReNameIfImpl<List<Es...>, L> : Type_t<::Seq<Es...>> {};
+
+template<template<class...> class L, template<class...> class List, class... Ts>
+struct ReNameIfImpl<List<Ts...>, L> : Type_t<List<ReNameIf<Ts, L>...>> {};
+
+template<template<class...> class L, class... Ts>
+struct ReNameIfImpl<L<Ts...>, L> : Type_t<::List<ReNameIf<Ts, L>...>> {}; // Recursion
+\end{cppcode}
+Данный шаблон рекурсивно проходится по типу и заменяет имя списка на \verb"::List" только, если список типов совпадает с параметром \verb"L".
+Теперь надо добавить это в имплементацию метода \verb"ReName":
+\begin{cppcode}
+template<class T>
+struct ReNameImpl : Type_t<T> {};
+
+template<template<class U, U...> class List, class T, T E1, T... Es>
+struct ReNameImpl<List<T, E1, Es...>> : Type_t<::Seq<E1, Es...>> {}; // List is NON empty!
+
+template<template<auto...> class List, auto... Es>
+struct ReNameImpl<List<Es...>> : Type_t<::Seq<Es...>> {};
+
+template<template<class...> class List, class... Ts>
+struct ReNameImpl<List<Ts...>> : Type_t<::List<ReNameIf<Ts, List>...>> {}; // ReNameIf!
+
+template<class T>
+using ReName = typename ReNameImpl<T>::type;
+\end{cppcode}
+То есть теперь \verb"ReName" во время вызова рекурсии после первой подмены зовет \verb"ReNameIf", который в рекурсии всегда зовет только себя.
+А это значит, что мы будем подменять только тип самого внешнего контейнера.
+Это решение не идеально, но как минимум для распечатки контейнеров подходит неплохо.
+Теперь мы получим вывод:
+\begin{cppcode}
+implicit instantiation of undefined template
+'Out<List<int, double, List<char, int>, std::vector<int, std::allocator<int>>>>'
+\end{cppcode}
+Если рассмотреть смешанные списки вида
+\begin{cppcode}
+namespace SomeLongName {
+  template<class...>
+  struct List {};
+  template<auto...>
+  struct AList{};  
+  
+  ext::PrintT<List<int, List<char, int>, std::vector<int>>, AList<1, 'c', 2.>>;
+}
+\end{cppcode}
+То на печати мы получим:
+\begin{cppcode}
+implicit instantiation of undefined template
+'Out<List<int, List<char, int>, std::vector<int, std::allocator<int>>, Seq<1, 'c', 2.>>>'
+\end{cppcode}
