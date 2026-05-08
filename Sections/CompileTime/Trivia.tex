@@ -219,9 +219,9 @@ are same = 0
 Для литералов с плавающей точкой есть еще трюк с \verb"std::bit_cast", который доступен с C++20.
 Но в C++20 есть просто на много более удобный подход, который будет рассмотрен ниже.
 
-\paragraph{Начиная с C++20}
+\paragraph{Начиная с C++17}
 
-Из коробки в C++20 все еще нельзя написать так
+Из коробки в C++17 все еще нельзя написать так
 \begin{cppcode}
 template<const char* arg>
 struct A {};
@@ -230,17 +230,18 @@ int main() {
   A<"123"> x;
 }
 \end{cppcode}
-Но можно сделать промежуточный объект \verb"ConstString", который поможет сохранить синтаксис использования как мы ожидаем.
+Но можно сделать промежуточный объект \verb"StringLiteral", который поможет сохранить синтаксис использования как мы ожидаем.
 \begin{cppcode}
 template<size_t N>
-struct ConstString {
+struct StringLiteral {
   char data[N]{};
-  constexpr ConstString(const char (&str)[N]) {
+  
+  constexpr StringLiteral(const char (&str)[N]) {
     std::copy_n(str, N, data);
   }
 };
 
-template<ConstString arg>
+template<StringLiteral arg>
 struct A {};
 
 int main() {
@@ -256,6 +257,25 @@ are same = 1
 \end{cppcode}
 И не надо никаких танцев с бубнами.
 В целом это небольшая цена за полный функционал.
+
+Обратите внимание на строчки
+\begin{cppcode}
+template<StringLiteral arg>
+struct A {};
+\end{cppcode}
+Здесь не указан шаблонный параметр для \verb"StringLiteral".
+Это связано с тем, что начиная с C++17 есть Class Template Argument Deduction (CTAD).
+Вы можете использовать имя шаблона, не указывая его параметры, если эти параметры можно вычленить из инициализирующего выражения.
+В примере выше
+\begin{cppcode}
+A<"123"> x;
+\end{cppcode}
+Мы инициализируем параметр строкой \verb$"123"$.
+Технически это массив длины $4$ (включая терминальный символ \verb"'\0'").
+Значит в данном случае инстанциируется класс
+\begin{cppcode}
+struct A<StringLiteral<4>> {};
+\end{cppcode}
 
 \subsubsection{Операции}
 
@@ -728,77 +748,3 @@ namespace SomeLongName {
 implicit instantiation of undefined template
 'Out<List<int, double, List<int>, std::vector<int>, Seq<1, 2, 3>>>'
 \end{cppcode}
-
-\subsubsection{Логические связки}
-
-Выше мы уже использовали связку \verb"IfElse", чтобы проверить выбирать тип в зависимости от условия.
-Это лишь нужно для того, чтобы изменить ужасный и длинный синтаксис из STL.
-Давайте я запишу другие связки, которые я бы использовал вместо STL-ных.
-Связка \verb"IfElse" приведена повторно для полноты картины этого блока.
-\begin{cppcode}
-namespace ext {
-template<bool cond, class T1, class T2>
-using IfElse = typename std::conditional<cond, T1, T2>::type;
-
-template<class... Ts>
-struct AndT : std::conjunction<Ts...> {};
-
-template<class... Ts>
-constexpr bool And = AndT<Ts...>::value;
-
-template<class... Ts>
-struct OrT : std::disjunction<Ts...> {};
-
-template<class... Ts>
-constexpr bool Or = OrT<Ts...>::value;
-
-template<class T>
-struct NotT : std::negation<T> {};
-
-template<class T>
-constexpr bool Not = NotT<T>::value;
-}
-\end{cppcode}
-Заметьте, что аргументы для логических операторов -- это классы, а не значения.
-Со значениями я и так могу делать все логические связки с помощью конструкций языка:
-\begin{cppcode}
-constexpr bool b1 = true;
-constexpr bool b2 = false;
-constexpr bool b3 = b1 && b2;
-constexpr bool b4 = b1 || b2;
-\end{cppcode}
-Связки выше предназначены для операций над типами, которые содержат информацию о значении результата.
-В этом случае подразумевается, что результат всегда является \verb"constexpr" статической константой с именем \verb"value".
-Например
-\begin{cppcode}
-template<class T>
-struct Condition1T {
-  static constexpr bool value = /*some condition on T*/;
-};
-
-template<class T>
-constexpr bool Condition1 = Condition1T<T>::value;
-
-template<class T>
-struct Condition2T {
-  static constexpr bool value = /*some condition T*/;
-};
-
-template<class T>
-constexpr bool Condition2 = Condition2T<T>::value;
-
-template<class T>
-using Condition3T = AndT<NotT<Condition1T<T>>, Condition2T<T>>;
-
-template<class T>
-constexpr bool Condition3 = Condition3T<T>::value;
-\end{cppcode}
-Как уже говорилось, такие промежуточные классы нужны для того, чтобы их можно было передавать в качестве аргументов в другие шаблоны.
-Можно было бы использовать только переменные \verb"Condition1" и \verb"Condition2" и с помощью них задать переменную \verb"Condition3" так
-\begin{cppcode}
-template<class T>
-constexpr bool Condition3 = !Condition2<T> && Condition2<T>;
-\end{cppcode}
-Однако, если мы хотим сделать операцию фильтрации по условию, то нам надо условие передавать как аргумент.
-В этом случае мы не сможем передать \verb"Condition3", но сможем передать \verb"Condition3T" в фильтрующий шаблон.
-В некотором смысле эти вспомогательные классы являются костылями вокруг ограничений языка.

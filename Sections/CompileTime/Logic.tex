@@ -1,0 +1,879 @@
+\ProvidesFile{Logic.tex}[Логические операции]
+
+
+\subsection{Логические операции}
+
+\subsubsection{Вспомогательные классы}
+
+Прежде всего я хочу уйти от ужасного синтаксиса STL вроде \verb"std::integral_constant" или \verb"std::conjunction".
+Это кошмар.
+
+\paragraph{Работа со значениями}
+
+Для начала давайте определим базовые классы, с которыми мы будем работать.
+В начале класс для произвольного типа, хранимого в compile-time.
+\begin{cppcode}
+template<class T, T x>
+struct Value_t {
+  using value_type = T;
+  static constexpr value_type value = x;
+};
+\end{cppcode}
+Здесь мы следуем соглашению, что класс-wrapper всегда хранит значение в статической переменной с именем \verb"value".
+Псевдоним \verb"value_type" вводится для совместимости с STL.
+
+Теперь можно задавать константы во время компиляции так
+\begin{cppcode}
+using Value1 = Value_t<int, 1>;
+using Value2 = Value_t<bool, false>;
+using Value3 = Value_t<char, 'c'>;
+\end{cppcode}
+Для удобства можно ввести вспомогательные типы вроде
+\begin{cppcode}
+template<bool v>
+struct Bool_t : Value_t<bool, v> {};
+
+template<char v>
+struct Char_t : Value_t<char, v> {};
+
+template<int v>
+struct Int_t : Value_t<int, v> {};
+...
+\end{cppcode}
+и так далее.
+Можно создать соответствующие типы для знаковых и беззнаковых встроенных типов.
+Так же можно создать соответствующие типы для \verb"float" и \verb"double".
+И теперь можно писать
+\begin{cppcode}
+using Value1 = Int_t<1>;
+using Value2 = Bool_t<false>;
+using Value3 = Char_t<'c'>;
+using Value4 = Float_t<1.2f>;
+using Value5 = Double_t<2.>;
+\end{cppcode}
+
+
+\paragraph{Работа с типами}
+
+В дальнейшем нам понадобится возможность упаковать внутрь класса другой класс.
+Для этого тоже заведем класс-wrapper.
+\begin{cppcode}
+template<class T>
+struct Type_t {
+  using type = T;
+};
+\end{cppcode}
+Еще понадобится возможность установить тип переменной.
+Для этого можно использовать встроенный в язык \verb"decltype".
+Однако, у него есть одна небольшая особенность, которую я хочу обсудить.
+Например, если мы напишем код вида
+\begin{cppcode}
+struct A {
+  using value_type = int;
+  static constexpr value_type value = 1;
+};
+\end{cppcode}
+Тогда
+\begin{cppcode}
+std::is_same_v<decltype(A::value), int>; // false
+std::is_same_v<decltype(A::value), const int>; // true
+\end{cppcode}
+То есть в тип переменной у нас добавляет ненужное \verb"const".
+В run-time это пожалуй разумно, потому что мы хотим отличать константные переменные от не константных.
+Но в compile-time у нас все переменные константные и такое поведение может привести к неприятным проблемам с кодом.
+Чтобы избавиться от появления \verb"const" в типе \verb"value" введем вспомогательный шаблон для определения типа так:
+\begin{cppcode}
+namespace detail {
+template<auto E>
+struct TypeOfImpl : Type_t<decltype(E)> {};
+} // namespace detail
+
+template<auto E>
+using TypeOf = detail::TypeOfImpl<E>::type;
+\end{cppcode}
+\begin{cppcode}
+std::is_same_v<TypeOf<A::value>, int>; // true
+std::is_same_v<TypeOf<A::value>, const int>; // false
+\end{cppcode}
+Причина такого поведения следующая.
+При подстановке \verb"A::value" в шаблон \verb"TypeOf" мы присваиваем к переменной определенной с типом \verb"auto".
+В таком случае \verb"auto" забывает про \verb"const".
+Это связано с тем, как работает в плюсах присваивание по значению.
+Например
+\begin{cppcode}
+int x = 1;
+const int y = 2;
+int z;
+z = x; // OK
+z = y; // OK
+\end{cppcode}
+Мы можем положить в неконстантную переменную как неконстантное значение, так и константное.
+Оно же просто скопируется и копия уже будет неконстантной.
+Кроме того,
+\begin{cppcode}
+const int x = 1;
+auto z = x;  // decltype(z) = int
+// or
+const auto z = x; // decltype(z) = const int
+\end{cppcode}
+Обратите внимание, что \verb"auto" не становится константной, даже если переменная справа от равенства константная.
+Если вы хотите сделать \verb"z" константной, то надо явно добавить квалификатор \verb"const".
+Можно запомнить так: \verb"auto" никогда не \verb"const" и никогда не \verb"reference".
+
+\subsubsection{Базовые связки}
+
+Теперь нужно научиться манипулировать логическими переменными.
+Выше мы уже использовали связку \verb"IfElse", чтобы выбрать тип в зависимости от условия.
+Данная деятельность не является необходимой, но я хочу уйти от ужасного синтаксиса STL и дополнительно добавлю недостающие связки.
+Связка \verb"IfElse" приведена повторно для полноты картины этого блока.
+
+\paragraph{Значения и классы-wrapper-ы}
+
+Прежде чем говорить про код, давайте обратим внимание, что у нас есть переменная и переменная запакованная в класс-wrapper:
+\begin{cppcode}
+constexpr int v = 1;
+
+struct A {
+  static constexpr int value = 2;
+};
+\end{cppcode}
+Таким образом есть значения типа \verb"T", а есть эти значения помещенные в какой-то класс-wrapper \verb"W(T)".
+Все логические операторы в STL работают над \verb"W(bool)" и возвращают значение из \verb"W(bool)".
+В общем случае у нас есть $4$ разных варианта:
+\begin{enumerate}
+\item \verb"T"$\to$\verb"T".
+Принимаем значения и возвращаем значения.
+
+\item \verb"T"$\to$\verb"W(T)".
+Принимаем значения, результат возвращаем завернутым в класс.
+Я для такого случая буду использовать суффикс \verb"_t".
+
+\item \verb"W(T)"$\to$\verb"W(T)".
+Принимаем аргументы завернутыми в класс и возвращаем результат завернутым в класс.
+Для такого случая я буду использовать суффикс \verb"_w".
+
+\item \verb"W(T)"$\to$\verb"T".
+Принимаем аргументы завернутыми в класс и возвращаем значение.
+Для такого случая я буду использовать суффикс \verb"_u".
+\end{enumerate}
+
+\paragraph{Имплементация связок}
+
+Вот пример того, как это выглядит для оператора \verb"And":
+\begin{cppcode}
+namespace detail {
+template<class /*void*/, class W1, class... Ws>
+struct AndImpl : W1 {};
+
+template<class W1, class W2, class... Ws>
+struct AndImpl<std::enable_if_t<bool(W1::value)>, W1, W2, Ws...>
+    : AndImpl<void, W2, Ws...> {};
+} // namespace detail
+
+template<class... Ws>
+struct And_w : detail::AndImpl<void, Ws...> {};
+
+template<>
+struct And_w<> : Bool_t<true> {};
+
+template<class... Ws>
+constexpr bool And_u = And_w<Ws...>::value;
+
+template<bool... Cs>
+struct And_t : And_w<Bool_t<Cs>...> {};
+
+template<bool... Cs>
+constexpr bool And = And_t<Cs...>::value;
+\end{cppcode}
+Зачем нужны все $4$ случая я обсужу чуть позже, а сейчас хочу обратить внимание на то, как работает эта имплементация.
+Для имплементации я завожу вспомогательный аргумент-флаг.
+Вторая версия шаблона является более специализированной версией первого.
+Потому компилятор будет стараться использовать его всегда, когда можно.
+Вторая специализация используется только если внутри первого аргумента \verb"W1" истина.
+Если же внутри \verb"W1" лежит ложь, то шаблон хранит значение \verb"value" из \verb"W1", то есть ложь.
+Обратите внимание, что если \verb"W1" хранит ложь, то остальные аргументы не вычисляются.
+Это очень важное явление, которое нам пригодится в будущем.
+
+Аналогично можно определить и все остальные операции.
+Вот так можно сделать операцию логического <<или>>:
+\begin{cppcode}
+namespace detail {
+
+template<class /*void*/, class W1, class... Ws>
+struct OrImpl : W1 {};
+
+template<class W1, class W2, class... Ws>
+struct OrImpl<std::enable_if_t<!bool(W1::value)>, W1, W2, Ws...>
+    : OrImpl<void, W2, Ws...> {};
+} // namespace detail
+
+template<class... Ws>
+struct Or_w : detail::OrImpl<void, Ws...> {};
+
+template<>
+struct Or_w<> : Bool_t<false> {};
+
+template<class... Ws>
+constexpr bool Or_u = Or_w<Ws...>::value;
+
+template<bool... Cs>
+struct Or_t : Or_w<Bool_t<Cs>...> {};
+
+template<bool... Cs>
+constexpr bool Or = Or_t<Cs...>::value;
+\end{cppcode}
+Отрицание можно сделать так:
+\begin{cppcode}
+namespace detail {
+
+template<class W>
+struct NotImpl : Bool_t<!bool(W::value)> {};
+} // namespace detail
+
+template<class W>
+struct Not_w : detail::NotImpl<W> {};
+
+template<class W>
+constexpr bool Not_u = Not_w<W>::value;
+
+template<bool C>
+struct Not_t : Not_w<Bool_t<C>> {};
+
+template<bool C>
+constexpr bool Not = Not_t<C>::value;
+\end{cppcode}
+Еще добавим импликацию
+\begin{cppcode}
+namespace detail {
+template<class W1, class W2>
+struct ImplyImpl : Or_w<Not_w<W1>, W2> {};
+}; // namespace detail
+
+// A => B
+template<class W1, class W2>
+struct Imply_w : detail::ImplyImpl<W1, W2> {};
+
+template<class W1, class W2>
+constexpr bool Imply_u = Imply_w<W1, W2>::value;
+
+template<bool A, bool B>
+struct Imply_t : Imply_w<Bool_t<A>, Bool_t<B>> {};
+
+template<bool A, bool B>
+constexpr bool Imply = Imply_t<A, B>::value;
+\end{cppcode}
+Теперь обсудим как пишется \verb"IfElse".
+\begin{cppcode}
+namespace detail {
+
+template<bool condition, class W1, class W2>
+struct IfElseImpl : W2 {};
+
+template<class W1, class W2>
+struct IfElseImpl<true, W1, W2> : W1 {};
+} // namespace detail
+
+template<bool condition, class W1, class W2>
+struct IfElse_w : detail::IfElseImpl<condition, W1, W2> {};
+
+template<bool condition, class W1, class W2>
+constexpr auto IfElse_v = IfElse_w<condition, W1, W2>::value;
+
+template<bool condition, class W1, class W2>
+using IfElse_u = typename IfElse_w<condition, W1, W2>::type;
+
+template<bool condition, class T1, class T2>
+struct IfElse_t : IfElse_w<condition, Type_t<T1>, Type_t<T2>> {};
+
+template<bool condition, class T1, class T2>
+using IfElse = typename IfElse_t<condition, T1, T2>::type;
+\end{cppcode}
+
+\paragraph{Еще связки}
+
+Я так же определяю еще связки для сравнения разного вида, чтобы можно было сравнивать сразу несколько значений на равенство друг другу.
+\begin{cppcode}
+namespace detail {
+template<class W1, class W2>
+struct areSame2Impl : Bool_t<false> {};
+
+template<class W>
+struct areSame2Impl<W, W> : Bool_t<true> {};
+} // namespace detail
+
+template<class T1, class T2>
+struct areSame2_t : detail::areSame2Impl<T1, T2> {};
+
+template<class T1, class T2>
+constexpr bool areSame2 = areSame2_t<T1, T2>::value;
+
+template<class W1, class W2>
+struct areSame2_w : areSame2_t<typename W1::type, typename W2::type> {};
+
+template<class W1, class W2>
+constexpr bool areSame2_u = areSame2_w<W1, W2>::value;
+
+namespace detail {
+
+template<class... Ws>
+struct areSameImpl : Bool_t<false> {};
+
+template<class W1, class W2, class... Ws>
+struct areSameImpl<W1, W2, Ws...>
+    : And_w<areSame2_w<W1, W2>, areSameImpl<W2, Ws...>> {};
+
+template<class W1>
+struct areSameImpl<W1> : Bool_t<true> {};
+
+template<>
+struct areSameImpl<> : Bool_t<true> {};
+} // namespace detail
+
+template<class... Ws>
+using areSame_w = detail::areSameImpl<Ws...>;
+
+template<class... Ws>
+constexpr bool areSame_u = areSame_w<Ws...>::value;
+
+template<class... Ts>
+struct areSame_t : detail::areSameImpl<Type_t<Ts>...> {};
+
+template<class... Ts>
+constexpr bool areSame = areSame_t<Ts...>::value;
+\end{cppcode}
+Так же определяю связки:
+\begin{enumerate}
+\item isLess
+\item isNotLess,
+\item isGreater
+\item isNotGreater
+\item isEqual
+\end{enumerate}
+Приведу имплементацию двух связок.
+Первая -- строгое сравнение \verb"isLess":
+\begin{cppcode}
+namespace detail {
+template<class W1, class W2>
+struct isLessImpl : Bool_t<(W1::value < W2::value)> {};
+} // namespace detail
+
+template<class W1, class W2>
+struct isLess_w : detail::isLessImpl<W1, W2> {};
+
+template<class W1, class W2>
+constexpr bool isLess_u = isLess_w<W1, W2>::value;
+
+template<auto A, auto B>
+struct isLess_t
+    : isLess_w<Value_t<Values::TypeOf<A>, A>, Value_t<Values::TypeOf<B>, B>> {};
+
+template<auto A, auto B>
+constexpr bool isLess = isLess_t<A, B>::value;
+\end{cppcode}
+Вторая связка -- сравнение на равенство:
+\begin{cppcode}
+template<class W1, class W2>
+struct isEqualImpl : Bool_t<(W1::value == W2::value)> {};
+} // namespace detail
+
+template<class W1, class W2>
+struct isEqual_w : detail::isEqualImpl<W1, W2> {};
+
+template<class W1, class W2>
+constexpr bool isEqual_u = isEqual_w<W1, W2>::value;
+
+template<auto A, auto B>
+struct isEqual_t
+    : isEqual_w<Value_t<Values::TypeOf<A>, A>, Value_t<Values::TypeOf<B>, B>> {
+};
+
+template<auto A, auto B>
+constexpr bool isEqual = isEqual_t<A, B>::value;
+\end{cppcode}
+Здесь полезными являются версии, которые принимают не сами значения, а их классы-wrapper-ы, потому что они позволяют сделать сравнение <<не вынимая значение из класса>>.
+Однако, я всегда определяю все $4$ версии шаблонов.
+
+\subsubsection{Условные вычисления}
+\label{section::ConditionalComputation}
+
+В этом разделе я хочу рассказать еще одну причину, зачем многие операции заворачиваются во вспомогательный класс.
+Давайте начнем с примера.
+Пусть у нас есть следующий шаблон для работы со списком
+\begin{cppcode}
+template<auto... Es>
+struct List {};
+
+using List1 = List<1, 2., 'c'>;
+using List2 = List<>;
+\end{cppcode}
+Теперь имплементируем функцию проверки, что у нас список
+\begin{cppcode}
+namespace detail {
+
+template<class TList>
+struct isListImpl : Bool_t<false> {};
+
+template<template<auto...> class TList, auto... Es>
+struct isListImpl<TList<Es...>> : Bool_t<true> {};
+} // namespace detail
+
+template<class TList>
+struct isList_t : detail::isListImpl<TList> {};
+
+template<class TList>
+constexpr bool isList = isList_t<TList>::value;
+
+template<class WList>
+struct isList_w : isList_t<typename WList::type> {};
+
+template<class WList>
+constexpr bool isList_u = isList_w<WList>::value;
+\end{cppcode}
+И еще добавим функцию вычисления размера списка так:
+\begin{cppcode}
+namespace detail {
+template<class TList>
+struct SizeImpl {
+  static_assert(isList<TList>, "The argument of Size MUST be an element list!");
+};
+
+template<template<auto...> class TList, auto... Es>
+struct SizeImpl<TList<Es...>> : Int_t<sizeof...(Es)> {};
+} // namespace detail
+
+template<class TList>
+struct Size_t : detail::SizeImpl<TList> {};
+
+template<class TList>
+constexpr int Size = Size_t<TList>::value;
+
+template<class WList>
+struct Size_w : Size_t<typename WList::type> {};
+
+template<class WList>
+constexpr int Size_u = Size_w<WList>::value;
+\end{cppcode}
+Теперь давайте обсудим как написать проверку того, что список не пуст.
+Наивный подход будет такой:
+\begin{cppcode}
+template<class TList>
+constexpr bool isNonEmptyList = isList<TList> && (Size<TList> > 0);
+\end{cppcode}
+Однако, это не сработает.
+В случае если \verb"TList" не является списком, то выражение \verb"Size<TList>" упадет на \verb"static_assert" из его имплементации.
+То есть во время компиляции оператор \verb"&&" НЕ вычисляется лениво, должны быть вычислены все его аргументы.
+Тем не менее, выше мы видели что на уровне классов-wrapper-ов логические связки <<и>> и <<или>> работают лениво.
+Давайте введем еще функцию проверки на пустоту:
+\begin{cppcode}
+namespace detail {
+
+template<class TList, bool isCorrect = isList<TList>>
+struct isEmptyImpl {
+  static_assert(isList<TList>,
+                "The first argument of isEmpty MUST be an element list!");
+};
+
+template<class TList>
+struct isEmptyImpl<TList, true> : Bool_t<(Size<TList> == 0)> {};
+} // namespace detail
+
+template<class TList>
+struct isEmpty_t : detail::isEmptyImpl<TList> {};
+
+template<class TList>
+constexpr bool isEmpty = isEmpty_t<TList>::value;
+
+template<class WList>
+struct isEmpty_w : isEmpty_t<typename WList::type> {};
+
+template<class WList>
+constexpr bool isEmpty_u = isEmpty_w<WList>::value;
+\end{cppcode}
+Вот теперь мы можем сделать вот такую проверку на непустой список:
+\begin{cppcode}
+template<class TList>
+struct isNonEmptyList_t : And_w<isList_t<TList>, Not_w<isEmpty_t<TList>>> {};
+
+template<class TList>
+constexpr bool isNonEmptyList = isNonEmptyList_t<TList>::value;
+
+template<class WList>
+struct isNonEmptyList_w : isNonEmptyList_t<typename WList::type> {};
+
+template<class WList>
+constexpr bool isNonEmptyList_u = isNonEmptyList_w<WList>::value;
+\end{cppcode}
+Тут нас будет больше всего интересовать первая версия с суффиксом \verb"_t".
+\begin{cppcode}
+template<class TList>
+struct isNonEmptyList_t : And_w<isList_t<TList>, Not_w<isEmpty_t<TList>>> {};
+\end{cppcode}
+Здесь компилятор вычисляет два класса:
+\begin{enumerate}
+\item \verb"isList_t<TList>".
+Этот шаблон вычисляется всегда по определению.
+
+\item \verb"Not_w<isEmpty_t<TList>>".
+Этот шаблон тоже вычисляется всегда.
+Действительно \verb"isEmpty_t" существует для любого значения \verb"TList".
+Он НЕ содержит \verb"value" внутри себя, а потому обращение внутрь этого класса будет вызывать ошибку компиляции и падение по \verb"static_assert".
+Но если мы не будем залазить внутрь, то ошибки компиляции не будет.
+\end{enumerate}
+и потом подставляет их в качестве аргументов в шаблон \verb"And_w", который принимает классы-wrapper-ы и возвращает тоже класс-wrapper.
+А так как мы унаследовались от него, то теперь и \verb"isNonEmptyList_t" будет содержать статическую константу \verb"value" с нужным значением.
+
+\subsubsection{Проверки}
+\label{section::LogicChecks}
+
+Следующий этап -- умение делать проверки со вспомогательными типами.
+В частности нужно уметь проверять есть ли в классе статическая переменная \verb"value" или тип \verb"type".
+Так же полезно уметь проверять тип \verb"value".
+Начнем с простого случая: проверяем, что элемент имеет заданный тип:
+\begin{cppcode}
+namespace detail {
+template<auto v, class T>
+struct isOfTypeImpl : std::is_same<TypeOf<v>, std::remove_cv_t<T>> {};
+} // namespace detail
+
+template<auto v, class T>
+constexpr bool isOfType = detal::isOfTypeImpl<v, T>::value;
+\end{cppcode}
+Обратите внимание, что мы убираем \verb"const" и \verb"volatile" с типа \verb"T".
+
+Теперь обсудим, как устроена проверка наличия полей \verb"value" и \verb"type" в классе.
+Идея в том, чтобы обратиться к этим полям.
+Если произошла ошибка, то поля нет, если ошибка не произошла, то поле есть.
+Однако, мы не хотим, чтобы код падал с ошибкой.
+Для этого вспоминаем SFINAE.
+По-простому шаблонам разрешено иметь ошибки при специализации шаблона.
+В этом случае это НЕ вызывает ошибку компиляции, а компилятор просто отбрасывает данную специализацию, как неподходящую.
+Для этого вводится дополнительный параметр, в котором будет вычисляться нужное выражение.
+Но прежде всего нам понадобится вспомогательный класс, который забывает, что в него подставили:
+\begin{cppcode}
+namespace detail {
+template<class... T>
+struct ForgetTImpl : Type_t<void>, Int_t<0> {};
+
+template<auto... v>
+struct ForgetVImpl : Type_t<void>, Int_t<0> {};
+} // namespace detail
+
+template<class... T>
+using ForgetT = typename detail::ForgetTImpl<T...>::type;
+
+template<auto... v>
+using ForgetV = typename ForgetVImpl<v...>::type;
+\end{cppcode}
+Работает это так
+\begin{cppcode}
+using Type1 = ForgetT<int, double, char>; // Type1 = void
+using Type2 = ForgetV<1, 2., 'c'>; // Type2 = void
+\end{cppcode}
+То есть этот шаблон всегда возаращает \verb"void".
+Его польза в том, что в него можно подставить любые типы или любые выражения и вычислить их в качестве аргументов.
+И вот этот шаблон и будет тем местом, где будет выполняться обращение к предполагаемому ресурсу.
+Вот Как можно проверить наличие поля \verb"type" в класс:
+\begin{cppcode}
+namespace detail {
+
+template<class T, class Flag = void>
+struct hasTypeImpl : Bool_t<false> {};
+
+template<class T>
+struct hasTypeImpl<T, ForgetT<typename T::type>> : Bool_t<true> {};
+} // namespace detail
+
+template<class T>
+constexpr bool hasType = detail::hasTypeImpl<T>::value;
+\end{cppcode}
+Давайте обсудим, как это работает.
+Пусть у нас есть следующий код
+\begin{cppcode}
+struct A {};
+struct B {
+  using type = int;
+};
+
+std::cout << hasType<A> << '\n'; // false
+std::cout << hasType<B> << '\n';  // true
+\end{cppcode}
+Обсудим, как работает код в случае класса \verb"A".
+\begin{enumerate}
+\item Для вычисления константы \verb"hasType" компилятор вычисляет правую часть, а именно
+\begin{center}
+\verb"hasTypeImpl<A, void>".
+\end{center}
+
+\item Теперь мы определили параметры для шаблона и надо понять, какую из двух версий использовать.
+\begin{enumerate}
+\item Под первую дефолтную версию подходят любые наборы параметров и получаем
+\begin{center}
+\verb"hasTypeImpl<A, void>".
+\end{center}
+
+\item Для второй специализации, компилятор пытается вычислить выражение
+\begin{center}
+\verb"hasTypeImpl<A, ForgetT<typename A::type>>".
+\end{center}
+Так как в \verb"A" нет поля \verb"type", то при попытке вычислить аргумент для \verb"ForgetT" будет ошибка.
+А это значит, данная специализация не подходит.
+И потому выбирается первая специализация.
+\end{enumerate}
+
+\item По определению в первой специализации значение \verb"value" равно \verb"false".
+\end{enumerate}
+Теперь посмотрим, как это работает в случае класса \verb"B".
+\begin{enumerate}
+\item Для вычисления константы \verb"hasType" компилятор вычисляет правую часть, а именно
+\begin{center}
+\verb"hasTypeImpl<B, void>".
+\end{center}
+
+\item Теперь мы определили параметры для шаблона и надо понять, какую из двух версий использовать.
+\begin{enumerate}
+\item Под первую дефолтную версию подходят любые наборы параметров и в частности \verb"<B, void>".
+
+\item Для второй специализации, компилятор пытается вычислить выражение
+\begin{center}
+\verb"hasTypeImpl<B, ForgetT<typename B::type>>".
+\end{center}
+
+В итоге опять получаем \verb"hasTypeImpl<B, void>".
+И эта специализация тоже подходит.
+\end{enumerate}
+
+\item Теперь компилятор должен выбрать какую версию шаблона взять.
+Тут действует правило, что если одна версия шаблона является специализацией другой, то специализация всегда в приоритете.
+В этом случае вторая версия является более специализированной и потому выбирается она.
+
+\item По определению во второй специализации значение \verb"value" равно \verb"true".
+\end{enumerate}
+Этот же подход можно использовать для остальных проверок.
+Вот проверка на наличие статической переменной \verb"value":
+\begin{cppcode}
+namespace detail {
+
+template<class T, class Flag = void>
+struct hasValueImpl : Bool_t<false> {};
+
+template<class T>
+struct hasValueImpl<T, ForgetV<T::value>> : Bool_t<true> {};
+} // namespace detail
+
+template<class T>
+constexpr bool hasValue = detail::hasValueImpl<T>::value;
+\end{cppcode}
+Если же мы хотим проверить, что \verb"value" имеет специальный тип, то надо сделать так:
+\begin{cppcode}
+namespace detail {
+template<class T, class R, class Flag = void>
+struct hasValueOfTypeImpl : Bool_t<false> {};
+
+template<class T, class R>
+struct hasValueOfTypeImpl<T, R, ForgetV<T::value>> : Bool_t<isOfType<T::value, R>> {};
+} // namespace detail
+
+template<class T, class R>
+constexpr bool hasValueOfType = detail::hasValueOfTypeImpl<T, R>::value;
+\end{cppcode}
+В таком случае, если аргументы шаблона дали ошибку, то есть нет поля \verb"T::value", то выражение проверяющее тип даже не будет вычисляться.
+А если такое поле есть, то мы можем вызвать \verb"isOfType<T::value, R>".
+И теперь можно написать проверку, что у нас есть поля \verb"value" и \verb"value_type" и что \verb"value" имеет тип \verb"value_type".
+Делаем это так же через дополнительное поле:
+\begin{cppcode}
+namespace detail {
+template<class T, class Flag = void>
+struct isValueImpl : Bool_t<false> {};
+
+template<class T>
+struct isValueImpl<T, ForgetT<decltype(T::value), typename T::value_type>>
+    : isOfType_t<T::value, typename T::value_type> {};
+} // namespace detail
+
+template<class T>
+constexpr bool isValue = detail::isValueImpl<T>::value;
+\end{cppcode}
+А теперь добавим проверку, что \verb"value_type" совпадает с заданным типом \verb"R".
+Делаем так:
+\begin{cppcode}
+namespace detail {
+template<class T, class R, class Flag = void>
+struct isValueOfTypeImpl : Bool_t<false> {};
+
+template<class T, class R>
+struct isValueOfTypeImpl<T, R,
+                         ForgetT<decltype(T::value), typename T::value_type>>
+    : Bool_t<isOfType<T::value, typename T::value_type> &&
+             std::is_same_v<std::remove_cv_t<typename T::value_type>,
+                            std::remove_cv_t<R>>> {};
+} // namespace detail
+
+template<class T>
+constexpr bool isBool = detail::isValueOfTypeImpl<T, bool>::value;
+
+template<class T>
+constexpr bool isInt = detail::isValueOfTypeImpl<T, int>::value;
+\end{cppcode}
+
+\paragraph{Имя переменной}
+% TO DO
+Что если мы хотим проверить наличие не имени \verb"value" или \verb"type", а какого-то произвольного?
+Вот тут у меня только плохие новости.
+Механизмов изменять имя переменной в языке нет.
+То есть под каждую переменную придется писать очередную проверку снова и снова.
+И вот это то самое единственное место, где могут пригодиться макросы.
+Надо превратить вот этот код в макрос:
+\begin{cppcode}
+namespace detail {
+template<class T, class R, class Flag = void>
+struct hasValueOfTypeImpl : Bool_t<false> {};
+
+template<class T, class R>
+struct hasValueOfTypeImpl<T, R, ForgetV<T::value>> : Bool_t<isOfType<T::value, R>> {};
+} // namespace detail
+
+template<class T, class R>
+struct hasValueOfType_t : detail::hasValueOfTypeImpl<T, R> {};
+
+template<class T, class R>
+constexpr bool hasValueOfType = hasValueOfType_t<T, R>::value;
+
+template<class WT, class WR>
+struct hasValueOfType_w
+    : hasValueOfType_t<typename WT::type, typename WR::type> {};
+
+template<class WT, class WR>
+constexpr bool hasValueOfType_u = hasValueOfType_w<WT, WR>::value;
+\end{cppcode}
+В начале сделаем вспомогательный макрос для генерации имплементации в пространстве имен \verb"detail":%
+\footnote{Операция \texttt{\#\#} для препроцессора является конкатенацией строк.}
+\begin{cppcode}
+#define HAS_MEMBER_OF_TYPE_IMPL(member)                                        \
+  namespace detail {                                                           \
+  template<class T, class R, class Flag = void>                                \
+  struct has_##member##_OfTypeImpl : Bool_t<false> {};                         \
+  template<class T, class R>                                                   \
+  struct has_##member##_OfTypeImpl<T, R, ForgetV<T::member>>                   \
+      : isOfType_t<T::member, R> {};                                           \
+  }
+\end{cppcode}
+А теперь сам макрос
+\begin{cppcode}
+#define HAS_MEMBER_OF_TYPE(member)                                             \
+  HAS_MEMBER_OF_TYPE_IMPL(member)                                              \
+  template<class T, class R>                                                   \
+  struct has_##member##_OfType_t : detail::has_##member##_OfTypeImpl<T, R> {}; \
+  template<class T, class R>                                                   \
+  constexpr bool has_##member##_OfType = has_##member##_OfType_t<T, R>::value; \
+  template<class WT, class WR>                                                 \
+  struct has_##member##_OfType_w                                               \
+      : has_##member##_OfType_t<typename WT::type, typename WR::type> {};      \
+  template<class WT, class WR>                                                 \
+  constexpr bool has_##member##_OfType_u =                                     \
+      has_##member##_OfType_w<WT, WR>::value;
+\end{cppcode}
+Теперь надо в начале сгенерировать шаблон для нужного имени и типа:
+\begin{cppcode}
+HAS_MEMBER_OF_TYPE(x)                                            
+\end{cppcode}
+Этот шаблон развернется в
+\begin{cppcode}
+namespace detail {
+template<class T, class R, class Flag = void>
+struct has_x_OfTypeImpl : Bool_t<false> {};
+
+template<class T, class R>
+struct has_x_OfTypeImpl<T, R, ForgetV<T::x>> : isOfType_t<T::x, R> {};
+}
+
+template<class T, class R>
+struct has_x_OfType_t : detail::has_x_OfTypeImpl<T, R> {};
+
+template<class T, class R>
+constexpr bool has_x_OfType = has_x_OfType_t<T, R>::value;
+
+template<class WT, class WR>
+struct has_x_OfType_w : has_x_OfType_t<typename WT::type, typename WR::type> {};
+
+template<class WT, class WR>
+constexpr bool has_x_OfType_u = has_x_OfType_w<WT, WR>::value;
+\end{cppcode}
+И теперь его можно использовать так:
+\begin{cppcode}
+class A {
+public:
+  static constexpr int x = 0;
+};
+
+class B {
+  static constexpr int x = 0;
+};
+
+struct C {
+  static constexpr bool x = false;
+};
+
+int main() {
+  std::cout << "has int x " << has_x_OfType<A, int> << '\n';  // returns true
+  std::cout << "has int x " << has_x_OfType<B, int> << '\n';  // returns false
+  std::cout << "has int x " << has_x_OfType<C, int> << '\n';  // returns false
+  return 0;
+}
+\end{cppcode}
+Обратите внимание, что тут идет проверка на доступную статическую переменную типа \verb"int" с именем \verb"x" внутри класса.
+Правильная проверка на наличие тех или иных полей в классе -- это отдельный вопрос.
+
+\subsubsection{Операции}
+
+Непосредственно над типами операции можно определять с помощью шаблонов.
+Однако, это автоматически означает, что вы лишаетесь возможность использовать привычные операторы для работы со значениями, например, сложить два целых числа или склеить две строки.
+Однако, можно вместо этого перейти к переменным и перегрузить все операции.
+Вот примеры
+\begin{cppcode}
+template<class T, T x>
+constexpr Value_t<T, x> val_v = {};
+
+template<bool v>
+constexpr Bool_t<v> bool_v = {};
+
+template<int v>
+constexpr Int_t<v> int_v = {};
+\end{cppcode}
+Теперь можно определить операции, вот например сложение.
+\begin{cppcode}
+namespace detail {
+template<class T>
+concept ClassValue = isValue<T>;
+} // namespace detail
+
+template<detail::ClassValue A, detail::ClassValue B>
+constexpr auto operator+(A, B) {
+  using T = decltype(A::value + B::value);
+  return val_v<T, A::value + B::value>;
+}
+\end{cppcode}
+Тогда можно использовать следующий синтаксис
+\begin{cppcode}
+auto value1 = int_v<1> + int_v<2>;
+// value1 = val_v<int, 3>;
+\end{cppcode}
+Для удобства можно добавить конвертацию переменных к хранимому типу.
+Я не люблю делать неявный каст, потому сделаю оператор скобки
+\begin{cppcode}
+template<class T, T x>
+struct Value_t {
+  using value_type = T;
+  static constexpr value_type value = x;
+
+  constexpr value_type operator()() const noexcept {
+    return value;
+  }
+};
+\end{cppcode}
+Тогда можно пользоваться так
+\begin{cppcode}
+auto value1 = int_v<1> + int_v<2>;
+// value1 = val_v<int, 3>;
+std::cout << "value1 = " << value1() << '\n';
+\end{cppcode}
+Аналогично можно перегрузить все существующие операторы (бинарные и унарные), включая операторы сравнения.

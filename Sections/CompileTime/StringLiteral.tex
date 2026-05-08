@@ -1,0 +1,631 @@
+\ProvidesFile{StringLiteral.tex}[Строковые литералы]
+
+
+\subsection{Строковые литералы}
+
+Строковые литералы являются заменой голому \verb"const char*" при работе со строками.
+Класс позволяет использовать строковые литералы как аргументы шаблона напрямую.
+Давайте посмотрим что можно еще выжать из этого класса.
+
+\subsubsection{Базовая имплементация}
+
+Давайте стартуем с имплементации, которая была упомянута в самом начале раздела.
+\begin{cppcode}
+template<size_t N>
+struct StringLiteral {
+  constexpr StringLiteral(const char (&str)[N]) {
+    std::copy_n(str, N, data);
+  }
+
+  char data[N]{};
+};
+\end{cppcode}
+Чтобы класс был используемым во время компиляции, у него все данные должны быть публичные.
+Теперь давайте добавим в этот класс некоторые методы, которые обеспечат удобство взаимодействия со строками.
+Начнем с методов доступа:
+\begin{cppcode}
+static constexpr std::size_t capacity() noexcept {
+  return N;
+}
+
+static constexpr std::size_t size() noexcept {
+  return N - 1;
+}
+
+constexpr std::string_view view() const {
+  return {data, N};
+}
+\end{cppcode}
+Так как в \verb"StringLiteral" строка оканчивается \verb"'\0'", то \verb"N" будет на $1$ больше, чем длина строки.
+Если мы захотим произвести какую-то посимвольную модификацию строки, то нам полезно иметь метод
+\begin{cppcode}
+constexpr StringLiteral map(auto f) const noexcept {
+  char tmp[N];
+  if constexpr (N > 1)
+    std::transform(data, data + N - 1, tmp, f);
+  tmp[N - 1] = '\0';
+  return tmp;
+}
+\end{cppcode}
+И тогда можно сделать что-то такое
+\begin{cppcode}
+StringLiteral str1 = "Some Phrase!";
+StringLiteral str2 = str1.map(to_lower_case);
+// str2 equals "some phrase!"
+\end{cppcode}
+Здесь подразумевается, что функция \verb"to_lower_case" определена где-то выше и переводит все буквы английского алфавита в строчный формат, а остальные символы не трогает.
+
+Так же полезно будет получать доступ к началу и концу строки, к первому и последнему элементу.
+Для этого определим функции \verb"front" и \verb"back", которые отщепляют от строки ее часть сначала или с конца.
+Если количество символов, что надо отщепить больше длины строки, то отщипываем всю строку.
+\begin{cppcode}
+constexpr char front() const noexcept {
+  return data[0];
+}
+
+template<size_t K>
+constexpr StringLiteral<(K < N ? K : N - 1) + 1> front() const noexcept {
+  static constexpr size_t K0 = (K < N ? K : N - 1);
+  char tmp[K0 + 1];
+  std::copy_n(data, K0, tmp);
+  tmp[K0] = '\0';
+  return tmp;
+}
+\end{cppcode}
+И аналогично функция для откусывания конца строки:
+\begin{cppcode}
+constexpr char back() const noexcept {
+  return data[N - 2];
+}
+
+template<size_t K>
+constexpr StringLiteral<(K < N ? K : N - 1) + 1> back() const noexcept {
+  static constexpr size_t K0 = (K < N ? K : N - 1);
+  char tmp[K0 + 1];
+  std::copy_n(data + (N - K0 - 1), K0, tmp);
+  tmp[K0] = '\0';
+  return tmp;
+}
+\end{cppcode}
+Так же полезно иметь функции, которые наоборот указывают сколько символов надо выкинуть сначала или с конца.
+Вот как это выглядит для выкидывания элементов в начале:
+\begin{cppcode}
+template<size_t K>
+constexpr StringLiteral<(K < N ? N - K : 1)> pop_front() const noexcept {
+  static constexpr size_t K0 = (K < N ? K : N - 1);
+  char tmp[N - K0];
+  std::copy_n(data + K0, N - K0, tmp);
+  return tmp;
+}
+  
+constexpr StringLiteral<N - 1> pop_front() const noexcept {
+  return pop_front<1>();
+}
+\end{cppcode}
+А вот для выкидывания элементов в конце:
+\begin{cppcode}
+template<size_t K>
+constexpr StringLiteral<(K < N ? N - K : 1)> pop_back() const noexcept {
+  static constexpr size_t K0 = (K < N ? K : N - 1);
+  char tmp[N - K0];
+  if constexpr (N - K0 > 1)
+    std::copy_n(data, N - K0 - 1, tmp);
+  tmp[N - K0 - 1] = '\0';
+  return tmp;
+}
+  
+constexpr StringLiteral<N - 1> pop_back() const noexcept {
+  return pop_back<1>();
+}
+\end{cppcode}
+Теперь можно сделать что-то такое
+\begin{cppcode}
+StringLiteral str1 = "Some Phrase!";
+StringLiteral str2 = str1.map(to_lower_case).pop_front<2>().front<7>();
+// str1 equals "me phra"
+\end{cppcode}
+Если мы хотим использовать \verb"StringLiteral" в аргументах шаблона, то мы в частности хотим подставлять их в \verb"Value_t" в качестве первого аргумента.
+Но тогда полезно завести псевдоним аналогично \verb"Int_t" для типа \verb"int".
+А для поддержки операций еще и соответствующую переменную.
+Будет это выглядеть так:
+\begin{cppcode}
+template<StringLiteral str>
+using Str_t = Value_t<StringLiteral<str.capacity()>, str>;
+
+template<StringLiteral str>
+constexpr Str_t<str> str_v = {};
+\end{cppcode}
+Теперь у нас есть класс-wrapper и для строковых литералов, который будет совместим со списками типов.
+
+\subsubsection{Операции}
+
+\paragraph{Конкатенация строк}
+
+Полезно переопределить оператор \verb"operator+" для конкатенации строк.
+Для этого нужны три оператора:
+\begin{cppcode}
+template<std::size_t N, std::size_t M>
+constexpr StringLiteral<N + M - 1> operator+(const StringLiteral<N>& left,
+                                             const StringLiteral<M>& right) {
+  char buffer[N + M - 1]{};
+  std::copy_n(left.data, N - 1, buffer);
+  std::copy_n(right.data, M, buffer + (N - 1));
+  return buffer;
+}
+
+template<std::size_t N, std::size_t M>
+constexpr StringLiteral<N + M - 1> operator+(const StringLiteral<N>& left,
+                                             const char (&right)[M]) {
+  return left + StringLiteral(right);
+}
+
+template<std::size_t N, std::size_t M>
+constexpr StringLiteral<N + M - 1> operator+(const char (&left)[N],
+                                             const StringLiteral<M>& right) {
+  return StringLiteral(left) + right;
+}
+\end{cppcode}
+Теперь можно делать такие вещи:
+\begin{cppcode}
+StringLiteral str1 = "Some";
+StringLiteral str2 = "Phrase";
+StringLiteral str3 = str1 + " " + str2 + "!";
+// str3 equals "Some Phrase!"
+\end{cppcode}
+А если вспомнить про псевдонимы \verb"Str_t" и \verb"str_t", то можно сделать еще так:
+\begin{cppcode}
+auto str = str_v<"Some "> + str_v<"Phrase!">;
+// str equals str_v<"Some Phrase!">
+\end{cppcode}
+
+\paragraph{Вывод в стандартный поток}
+
+Так же полезно иметь возможность вывести строковый литерал на печать в стандартный поток вывода.
+Для этого определим оператор:
+\begin{cppcode}
+template<std::size_t N>
+std::ostream& operator<<(std::ostream& out, StringLiteral<N> str) {
+  out << str.data;
+  return out;
+}
+\end{cppcode}
+После чего можно спокойно писать
+\begin{cppcode}
+StringLiteral str1 = "Some";
+StringLiteral str2 = "Phrase";
+StringLiteral str3 = str1 + " " + str2 + "!";
+std::cout << str3 << '\n';  // prints "Some Phrase!"
+\end{cppcode}
+
+\subsubsection{Преобразование встроенных типов к StringLiteral}
+
+\paragraph{Печать списка элементов в стандартный поток}
+
+В начале давайте начну с того, для чего это нужно.
+Пусть у нас есть список элементов, скажем
+\begin{cppcode}
+template<auto... Es>
+struct List {};
+
+using List1 = List<1, 3., 'c', true>;
+\end{cppcode}
+И мы хотим этот список распечатать в стандартный поток, то нужно составить соответствующую строку, которая бы представляла состояние списка.
+Это можно сделать следующим образом:
+\begin{enumerate}
+\item Заменить каждый элемент списка на StringLiteral, чтобы потом оперировать только со строками.
+Тогда должен получиться список вида
+\begin{cppcode}
+List<StringLiteral("1"), StringLiteral("3"), StringLiteral("c"), StringLiteral("true")>;
+\end{cppcode}
+
+\item Теперь эти строки надо склеить с помощью соединения \verb$", "$ и получить строку
+\begin{cppcode}
+"1, 3, c, true"
+\end{cppcode}
+
+\item После чего для красоты добавить открывающиеся и закрывающиеся скобки:
+\begin{cppcode}
+"[1, 3, c, true]"
+\end{cppcode}
+\end{enumerate}
+
+\paragraph{Имплементация}
+
+Давайте напишем оператор для печати списка из произвольных элементов
+\begin{cppcode}
+template<auto... Es>
+struct List {};
+
+template<class TList, class = std::enable_if_t<isList<TList>>>
+std::ostream& operator<<(std::ostream& out, TList) {
+  if constexpr (isEmpty<TList>) {
+    out << "[ ]";
+  } else {
+    using SList = MapT<ToStringLiteral_t, TList>;
+    static constexpr StringLiteral content =
+        FoldL0T<JoinWithComma, SList>;
+    static constexpr StringLiteral txt = "[" + content + "]";
+    out << txt;
+  }
+  return out;
+}
+\end{cppcode}
+При этом вспомогательные классы и методы выглядят так
+\begin{cppcode}
+template<StringLiteral left, StringLiteral right, StringLiteral delimiter>
+struct Join {
+  static constexpr auto value = left + delimiter + right;
+};
+
+template<StringLiteral left, StringLiteral right>
+struct JoinWithComma : Join<left, right, ", "> {};
+\end{cppcode}
+Как это используется:
+\begin{cppcode}
+template<auto... Es>
+struct List {};
+
+using List1 = List<1, 3., 'c', true>;
+
+std::cout << List1{} << '\n';
+\end{cppcode}
+То есть мы должны создать фиктивный объект типа \verb"List1" и отдать его на печать.
+
+Теперь давайте пройдемся по коду оператора \verb"operator<<".
+Посмотрим только на интересную часть печати не пустого списка:
+\begin{enumerate}
+\item В начале мы переводим каждый элемент из списка в строковый литерал, поэлементным применением:
+\begin{cppcode}
+using SList = MapT<ToStringLiteral_t, TList>;
+\end{cppcode}
+
+\item После чего объединяем все литералы в одну строку, соединяя элементы с помощью \verb$", "$:
+\begin{cppcode}
+static constexpr StringLiteral content = FoldL0T<JoinWithComma, SList>;
+\end{cppcode}
+
+\item Ну и наконец-то добавляем скобки по краям:
+\begin{cppcode}
+static constexpr StringLiteral txt = "[" + content + "]";
+\end{cppcode}
+\end{enumerate}
+
+\paragraph{Проблемы}
+
+И вот в этом всем мероприятии есть одна маленькая неприятная деталь: в C++ НЕТ \verb"constepxr" методов, которые бы переводили встроенные типы в строки.
+Точнее есть метод \verb"to_chars", который умеет целочисленные типы переводить в строки.
+И начиная с C++23 он является \verb"constexpr" только для целочисленных типов.
+Если же вы хотите использовать его для \verb"float" или \verb"double", то эти преобразования вам придется писать руками.
+Так себе занятие, учитывая возможные проблемы с потеряй точности.
+Тем не менее, это сделать можно и этим мы сейчас займемся.
+Будем страдать.
+
+\paragraph{Вспомогательный тип \texttt{FixedString}}
+
+Я хочу выделить отдельную \verb"constexpr" функцию, которая будет переводить значение встроенного типа в \verb"StringLiteral".
+В идеале мы бы хотели что-то такое:
+\begin{cppcode}
+template<class T>
+StringLiteral to_string(T val) {
+  /*implementation*/
+}
+\end{cppcode}
+Однако, \verb"StringLiteral" не является классом, это шаблон для которого надо указать параметр -- длина строки.
+\begin{cppcode}
+template<class T>
+StringLiteral<?> to_string(T val) {
+  /*implementation*/
+}
+\end{cppcode}
+Так как это шаблонный параметр, то эта длина должна быть известна во время компиляции.
+С другой стороны, длина строкового представления числа с плавающей запятой зависит от конкретного значения в переменной \verb"val".
+И так как это аргумент функции, то конкретную длину мы можем узнать только в run-time.
+
+Чтобы решить эту проблему нужно ввести еще один вспомогательный тип -- строку фиксированной длины \verb"FixedString".
+Для каждого целого типа \verb"T" длина строкового представления будет уж точно не больше, чем длина бинарного представления числа.
+То есть для \verb"int" должно быть достаточно $32$ знаков, а для \verb"long long" -- $64$ знака.
+Если же дано число с плавающей запятой, то для \verb"float" точно можно оценить длину целой и дробной части в $32$ знака, а для \verb"double" в $64$ знака соответственно. 
+Однако, у этого правила есть исключение.
+Для типа \verb"char" мы все же хотим печатать не целое число, а соответствующий символ.
+Аналогично для \verb"bool" мы хотим печатать не $0$ и $1$, а \verb"false" и \verb"true".
+
+Вот как будет выглядеть вспомогательный тип:
+\begin{cppcode}
+template<size_t N>
+struct FixedString {
+
+  std::array<char, N> data{};
+  size_t size = 0;
+
+  constexpr FixedString() = default;
+
+  template<size_t M, class = std::enable_if_t<(M <= N + 1)>>
+  constexpr FixedString(const char (&buffer)[M]) {
+    if (M == 0)
+      return;
+    // Not null terminated
+    std::copy_n(buffer, M - 1, data.data());
+    size = M - 1;
+  }
+  template<size_t M, class = std::enable_if_t<(M <= N)>>
+  constexpr FixedString(char (&buffer)[M]) {
+    std::copy_n(buffer, M, data.data());
+    size = M;
+  }
+
+  constexpr std::string_view view() const {
+    return {data.data(), size};
+  }
+  constexpr char back() const {
+    return data[size - 1];
+  }
+  constexpr bool pop_back() {
+    if (size == 0)
+      return false;
+    --size;
+    return true;
+  }
+  constexpr bool append(char c) {
+    if (size < N) {
+      data[size++] = c;
+      return true;
+    }
+    return false;
+  };
+  template<size_t M>
+  constexpr bool append(const char (&buffer)[M]) {
+    if (M == 0)
+      return true;
+    for (size_t i = 0; i < M - 1; ++i) {
+      bool result = append(buffer[i]);
+      if (!result)
+        return false;
+    }
+    return true;
+  }
+  template<size_t M>
+  constexpr bool append(const FixedString<M>& str) {
+    for (size_t i = 0; i < str.size; ++i) {
+      bool result = append(str.data[i]);
+      if (!result)
+        return false;
+    }
+    return true;
+  }
+};
+\end{cppcode}
+Данный тип хранит строку, которая не заканчивается \verb"'\0'".
+Так как мы будем использовать эту строку как буффер, в который будут складываться символы, то делаем только методы добавления и удаления в конец, доступ с конца.
+Если добавляемый элемент уже не влезает, мы его просто игнорируем.
+Чтобы понять добавили мы элемент или нет, будем возвращать \verb"true" в случае, если добавили и \verb"false", если нет.
+Да, я понимаю, что лучше \verb"enum class" со статусом, но мне было лень тут разводить это все.
+
+\paragraph{Преобразование целых типов в StringLiteral}
+
+Теперь как будет выглядеть процесс преобразования значения в строку.
+Прежде всего у нас будет \verb"constexpr" функция \verb"to_string", которая будет переводить встроенные значения в литералы.
+Вот так будет выглядеть случай целого типа отличного от \verb"bool" или \verb"char".
+\begin{cppcode}
+template<class T,
+         class = std::enable_if_t<(std::is_integral_v<T> &&
+                                   !isBool<T> && !isChar<T>)>>
+constexpr FixedString<sizeof(T) * 8> to_string(T val) {
+  FixedString<sizeof(T) * 8> str{};
+  auto result = std::to_chars(&*str.data.begin(), &*str.data.end(), val);
+  str.size = result.ptr - &*str.data.begin();
+  return str;
+}
+\end{cppcode}
+В этой имплементации я пользуюсь тем, что в C++23 функция \verb"std::to_char" является \verb"constexpr" для целых типов.
+Чтобы обслужить случай \verb"bool" и \verb"char" мы добавим перегруженные версии функций так:
+\begin{cppcode}
+constexpr FixedString<8> to_string(bool val) {
+  if (val)
+    return "true";
+  return "false";
+}
+
+constexpr FixedString<2> to_string(char val) {
+  FixedString<2> str;
+  str.append(val);
+  return str;
+}
+\end{cppcode}
+Самый интерес представляет данная функция для типов с плавающей запятой.
+Это мы обсудим ниже, а сейчас я хочу собрать общее решение.
+Чтобы суметь преобразовать \verb"FixedString" в \verb"StringLiteral", мы должны получать \verb"FixedString" в качестве шаблонного параметра, чтобы можно было считать его длину во время компиляции.
+Для этого создадим вспомогательный класс \verb"Context" так:
+\begin{cppcode}
+template<FixedString str>
+struct Context {
+  static constexpr StringLiteral<str.size + 1> make() {
+    char tmp[str.size + 1]{};
+    std::copy_n(str.data.data(), str.size, tmp);
+    tmp[str.size] = '\0';
+    return tmp;
+  }
+};
+\end{cppcode}
+Теперь конвертация \verb"FixedString" в \verb"StringLiteral" можно сделать так
+\begin{cppcode}
+constepxr FixedString<64> str1 = "abc";
+StringLiteral str2 = Context<str1>::make();
+\end{cppcode}
+Теперь сделаем удобную \verb"constexpr" функцию вместо класса:
+\begin{cppcode}
+template<auto val, class = enableIfIntegralOrFloat<val>>
+constexpr auto toStringLiteral() {
+  return Context<to_string(val)>::make();
+}
+\end{cppcode}
+При этом мы включаем эту функцию только для целых встроенных типов и для встроенных типов с плавающей запятой.
+\begin{cppcode}
+template<auto val>
+constexpr bool isIntegralOrFloat = std::is_integral_v<decltype(val)> ||
+                                   std::is_floating_point_v<decltype(val)>;
+template<auto val>
+using enableIfIntegralOrFloat = std::enable_if_t<isIntegralOrFloat<val>>;
+\end{cppcode}
+Теперь сделаем класс-wrapper для хранения сконвертированного значения:
+\begin{cppcode}
+template<auto val>
+struct ToStringLiteral_t
+    : Value_t<decltype(toStringLiteral<val>()), toStringLiteral<val>()> {};
+\end{cppcode}
+И теперь осталось сделать еще $3$ варианта класса как раньше:
+\begin{cppcode}
+template<auto val>
+constexpr auto ToStringLiteral = ToStringLiteral_t<val>::value;
+
+template<class W>
+struct ToStringLiteral_w : ToStringLiteral_t<W::value> {};
+
+template<class W>
+constexpr auto ToStringLiteral_u = ToStringLiteral_w<W>::value;
+\end{cppcode}
+Теперь если надо сконвертировать все элементы контейнера в StringLiteral, это можно сделать так:
+\begin{cppcode}
+template<auto... Es>
+struct List {};
+
+using List1 = List<1, 2., 'c', true>;
+using List2 = Map<ToStringLiteral_t, List1>;
+// List2 equals 
+// List<StringLiteral("1"), StringLiteral("2"), StringLiteral("c"), StringLiteral("true")>
+\end{cppcode}
+Теперь осталось рассказать про имплементацию метода \verb"to_string" для типов с плавающей запятой.
+
+\paragraph{Обработка \texttt{float} и \texttt{double}}
+
+Начнем с самой функции:
+\begin{cppcode}
+template<class T, class = std::enable_if_t<std::is_floating_point_v<T>>>
+constexpr auto to_string(T Value, int precision = PrecisionLimit<T>) {
+  constexpr size_t str_size = SizeOfUIntFor<T> * 2;
+
+  // not constexpr for MSVC
+  if (std::isnan(Value)) {
+    return FixedString<str_size>("nan");
+  }
+  // not constexpr for MSVC
+  if (std::isinf(Value)) {
+    if (Value < 0)
+      return FixedString<str_size>("-inf");
+    return FixedString<str_size>("inf");
+  }
+
+  precision = std::min<int>(precision, PrecisionLimit<T>);
+  FixedString<str_size> res;
+  T val = (Value < 0) ? (res.append('-'), -Value) : Value;
+  res.append(i_part(val));
+  res.append('.');
+  res.append(f_part(val, precision));
+  return trim(res);
+}
+\end{cppcode}
+Давайте пройдемся по функции.
+\begin{enumerate}
+\item В начале обрабатываем особые случаи:
+\begin{itemize}
+\item Случай \verb"nan"
+
+\item Случай \verb"inf"
+
+\item Случай \verb"-inf"
+\end{itemize}
+Эти случаи можно проверить с помощью STL методов \verb"isnan" и \verb"isinf".
+Однако, они не для всех компиляторов являются \verb"constexpr".
+Потому их придется написать самостоятельно (видимо оставляю это как упражнение для пытливого читателя).
+
+\item Дальше идет обработка самого числа.
+В начале мы обрезаем точность, которую нам передали в качестве аргумента до максимальной точности данного типа.
+
+\item Заводим \verb"FixedString" нужного размера (удвоенная битовая длина числа).
+
+\item Отдельно записываем знак, если нужно.
+
+\item Вычисляем целую часть и пишем ее в \verb"FixedString".
+
+\item Добавляем \verb$"."$ после целой части.
+
+\item Вычисляем дробную часть и пишем ее в \verb"FixedString" после точки.
+
+\item Удаляем нули в конце дробной части.
+Если дробная часть вся удалилась, то удаляем и знак точки.
+\end{enumerate}
+Теперь осталось понять, как вычислять целую и дробную часть.
+Для целой части все просто:
+\begin{cppcode}
+template<class T, class = std::enable_if_t<std::is_floating_point_v<T>>>
+constexpr FixedString<SizeOfUIntFor<T>> i_part(T value) {
+  FixedString<SizeOfUIntFor<T>> res{};
+  T val = (value < 0) ? (res.append('-'), -value) : value;
+  UIntOf<T> ipart = static_cast<UIntOf<T>>(val);
+  res.append(to_string(ipart));
+  return res;
+}
+\end{cppcode}
+Здесь \verb"T" либо \verb"float" либо \verb"double".
+Сама функция работает так:
+\begin{enumerate}
+\item Заводим \verb"FixedString" размера равного количеству знаков в бинарном представлении числа.
+Этого точно хватит.
+
+\item Учитываем знак, если надо.
+
+\item Теперь кастуем тип \verb"T" в подходящий целочисленный беззнаковый тип \verb"UIntOf<T>", что отрезает дробную часть.
+
+\item И теперь добавляем в \verb"FixedString" конвертацию целой части, которая у нас уже имеется.
+И возвращаем результат.
+\end{enumerate}
+Теперь дробная часть.
+Здесь надо учитывать точность.
+Для разных типов \verb"float" и \verb"double" это будут свои константы, которые можно настроить через шаблоны.
+Я пропущу эти вспомогательные вещи.
+Вот как выглядит функция:
+\begin{cppcode}
+template<class T, class = std::enable_if_t<std::is_floating_point_v<T>>>
+constexpr FixedString<FractionSize<T>> f_part(T value, int precision) {
+  T fpart = value - static_cast<UIntOf<T>>(value);
+  precision = std::min<int>(precision, PrecisionLimit<T>);
+  UIntOf<T> scaled = static_cast<UIntOf<T>>(fpart * pow10_table[precision] + 0.5);
+  
+  FixedString<FractionSize<T>> tmp{};
+  tmp.size = precision;
+  for (int i = precision - 1; i >= 0; --i) {
+    tmp.data[i] = (scaled % 10) + '0';
+    scaled /= 10;
+  }
+  return tmp;
+}
+\end{cppcode}
+Функция работает следующим образом:
+\begin{enumerate}
+\item В начале вычленяем дробную часть \verb"fpart".
+
+\item После этого умножаем дробную часть на $10^K$, где $K$ свое для каждого типа.
+Для такого умножения я храню таблицу степеней $10$.
+\begin{cppcode}[numbers = none]
+inline constexpr std::array<double, 17> pow10_table = {
+    1e0, 1e1,  1e2,  1e3,  1e4,  1e5,  1e6,  1e7, 1e8,
+    1e9, 1e10, 1e11, 1e12, 1e13, 1e14, 1e15, 1e16};
+\end{cppcode}
+
+\item Преобразованием к целому типу я отрезаю первые \verb"precision" знаков у дробной части в виде целого числа.
+
+\item Далее посимвольно записываю дробную часть в \verb"FixedString" и возвращаю результат.
+\end{enumerate}
+Для типа \verb"double" значение \verb"precision" берется равным $14$, а для типа \verb"float" равным $5$.
+
+И осталось привести имплементацию функции \verb"trim", отрезающей нули в конце строкового представления числа с плавающей запятой.
+\begin{cppcode}
+template<size_t M>
+constexpr auto trim(FixedString<M> str) {
+  while (str.size > 0 && str.back() == '0')
+    str.pop_back();
+  if (str.size > 0 && str.back() == '.')
+    str.pop_back();
+  return str;
+}
+\end{cppcode}
+В целом тут можно не удалять точку, если хочется подчеркнуть, что число с плавающей запятой.
