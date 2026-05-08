@@ -462,7 +462,7 @@ private:
 template<class G>
 class Accessor {
 public:
-  usugin T = typename G::type;
+  using T = typename G::type;
 
   const T* operator->() const {
     return &G::instance();
@@ -526,7 +526,7 @@ private:
 template<class G>
 class Accessor : G {
 public:
-  usugin T = typename G::type;
+  using T = typename G::type;
 
   const T* operator->() const {
     return &G::instance();
