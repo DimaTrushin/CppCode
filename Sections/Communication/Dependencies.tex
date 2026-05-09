@@ -1,0 +1,328 @@
+\ProvidesFile{Dependencies.tex}[Зависимости]
+
+
+\subsection{Зависимости объектов и функций}
+
+Так часто бывает что при исполнении какой-либо функции или метода объекта, ему нужно вызвать методы другого объекта, который решает вспомогательную задачу.
+Например, метод создающий матрицу может использовать случайный генератор для инициализации ее элементов.
+Или класс для отображения пользовательского интерфейса может использовать класс-локализатор, который знает все надписи для отображения.
+Давайте обсудим, каким образом можно передавать зависимости в функции и в объекты классов.
+
+\subsubsection{Зависимости функций}
+
+Начнем с простого примера функции:
+\begin{cppcode}
+Matrix create_matrix(Rows m, Cols n);
+\end{cppcode}
+Мы подразумеваем, что этот метод создает случайную матрицу указанных размеров.%
+\footnote{Здесь \verb"Rows" и \verb"Cols" -- strict aliases для размеров матрицы, подробнее в разделе~\ref{section::CtorArgs}.}
+Теперь вопрос в том, какой случайный генератор будет использовать функция и как это сделать правильно?
+
+Что мы можем сделать:
+\begin{enumerate}
+\item Передать случайный генератор явно в виде аргументов.
+При этом у функции технически два вида аргументов:
+\begin{enumerate}
+\item Шаблонные параметры.
+\begin{cppcode}
+class Random { ... };
+
+template<class Rnd>
+Matrix create_matrix(Rows m, Cols n);
+
+Matrix m = create_matrix<Random>(3, 4);
+\end{cppcode}
+Эти аргументы должны быть известны на этапе компиляции и не меняются во время исполнения.
+Так же обратим внимание, что тут передается не конкретный объект, который помнит свое состояние, а имя класса.
+Если сделать наивную имплементацию вида
+\begin{cppcode}
+template<class Rnd>
+Matrix create_matrix(Rows m, Cols n) {
+  Rnd rnd{123};
+  Matrix mat(m, n);
+  for (auto& element : mat.data())
+    element = rnd.uniform(0., 1.);
+  return mat;
+}
+\end{cppcode}
+То мы теряем всякую случайность.
+Потому что при каждом вызове метода мы создаем полностью предетерминированный случайный генератор, инициализированный одинаково, и потому инициализирующий все матрицы одинаково.
+В таком случае у нас должен быть статический метод, который помнит предыдущее состояние:
+\begin{cppcode}
+template<class Rnd>
+Matrix create_matrix(Rows m, Cols n) {
+  Matrix mat(m, n);
+  for (auto& element : mat.data())
+    element = Rnd::uniform(0., 1.);
+  return mat;
+}
+\end{cppcode}
+Метод \verb"uniform" тогда обязан хранить некоторое состояние внутри \verb"static" переменной, то есть глобальной переменной, которая видна только этому методу:
+\begin{cppcode}
+class Random {
+public:
+  ...
+  static Matrix uniform(double a, double b) {
+    static Generator generator{123};
+    return uniform_impl(a, b, generator);
+  }
+};
+\end{cppcode}
+
+\item Аргументы функции.
+\begin{cppcode}
+class Random { ... };
+
+Matrix create_matrix(Rows m, Cols n, Random& rnd);
+
+Random rnd{123};
+Matrix m = create_matrix(3, 4, rnd);
+\end{cppcode}
+Эти аргументы могут меняться во время исполнения.
+Это по сути единственное отличие от предыдущего случая. 
+\end{enumerate}
+
+\item Использовать глобальный случайный генератор.
+И тут есть две версии:
+\begin{enumerate}
+\item Использовать приватный \verb"static" генератор.
+\begin{cppcode}
+Matrix create_matrix(Rows m, Cols n) {
+  static Random rnd{123};
+  Matrix mat(m, n);
+  for (auto& element : mat.data())
+    element = rnd.uniform(0., 1.);
+  return mat;
+}
+\end{cppcode}
+
+\item Использовать Singleton.
+\begin{cppcode}
+Matrix create_matrix(Rows m, Cols n) {
+  GRndAccessor rnd;
+  Matrix mat(m, n);
+  for (auto& element : mat.data())
+    element = rnd->uniform(0., 1.);
+  return mat;
+}
+\end{cppcode}
+Подробнее о том, что тут происходит можно посмотреть в разделе~\ref{section::Global}, что такое \verb"Accessor" можно глянуть в подразделе~\ref{section::SingletonParams}.
+Разница между первым и вторым подходом только в одном: в первом случае случайный генератор виден только одной функции, а во втором случае несколько функций могут обращаться к одному и тому же генератору.
+\end{enumerate}
+\end{enumerate}
+
+Вот так выглядят вызовы во всех $4$ случаях:
+\begin{cppcode}
+Matrix m = create_matrix<Random>(3, 4); // explicit compile-time
+Matrix m = create_matrix(3, 4, rnd);    // explicit run-time
+Matrix m = create_matrix(3, 4);         // implicit static
+Matrix m = create_matrix(3, 4);         // implicit singleton
+\end{cppcode}
+
+Сделаем несколько замечаний
+\begin{enumerate}
+\item В случаях $1$ и $2$ нам приходится явно указывать генератор, что может быть не удобно.
+
+\item В случаях $3$ и $4$ нет никакой возможности понять вообще используется ли какой-то внешний  генератор или нет.
+И эти два случая не отличимы на стороне пользователя.
+
+\item В случаях $1$ и $2$ можно подменять генераторы при разных вызовах метода.
+\begin{cppcode}
+Matrix m = create_matrix<Random1>(3, 4); // explicit compile-time
+Matrix m = create_matrix<Random2>(3, 4); // explicit compile-time
+Matrix m = create_matrix(3, 4, rnd1);    // explicit run-time
+Matrix m = create_matrix(3, 4, rnd2);    // explicit run-time
+\end{cppcode}
+
+\item В случаях $3$ и $4$ не возможно подменить один генератор другим, при всех вызовах используется один и тот же генератор.
+
+\item В случаях $1$ и $2$ можно избавиться от необходимости вводить явно генератор на стороне пользователя, указав дефолтный генератор.
+Для шаблонного случая вот так:
+\begin{cppcode}
+template<class Rnd>
+Matrix create_matrix(Rows m, Cols n);  // template function
+
+Matrix create_matrix(Rows m, Cols n) { // overloaded function
+  return create_matrix<DefRandom>(m, n);
+}
+
+Matrix m = create_matrix<Random>(3, 4);
+Matrix m = create_matrix(3, 4);
+\end{cppcode}
+Либо с помощью дефолтных параметров аргумента:
+\begin{cppcode}
+template<class Rnd = Random>
+Matrix create_matrix(Rows m, Cols n);
+
+Matrix m = create_matrix<Random>(3, 4);
+Matrix m = create_matrix(3, 4);
+\end{cppcode}
+Для аргументов метода вот так:
+\begin{cppcode}
+Matrix create_matrix(Rows m, Cols n, Random& rnd);
+
+Matrix create_matrix(Rows m, Cols n) {
+  return create_matrix(m, n, GRandom::instance());
+}
+
+Matrix m = create_matrix(3, 4, rnd);
+Matrix m = create_matrix(3, 4);
+\end{cppcode}
+Либо с помощью дефолтных параметров аргумента:
+\begin{cppcode}
+Matrix create_matrix(Rows m, Cols n, Random& rnd = GRandom::instance());
+
+Matrix m = create_matrix(3, 4, rnd);
+Matrix m = create_matrix(3, 4);
+\end{cppcode}
+С точки зрения API оба подхода эквивалентны.
+Однако, разница появляется на уровне ABI.
+Если вам это важно, то лучше пользоваться первым подходом.
+Так же этот вопрос подробно обсуждается в разделе~\ref{section::SingletonRefactoring}.
+\end{enumerate}
+Что из этого использовать?
+Я бы использовал подходы $1$ и $2$ с перевесом в сторону $2$, если вам нужно менять что-либо в run-time.
+Лучше для функций придумать нельзя, просто потому что для функции есть только два вида внешних данных: ее аргументы и глобальные переменные.
+И мы по сути рассмотрели все возможные подходы.
+Явная передача данных намного лучше, потому что с ней идет параллельно локальность.
+Ситуации, когда надо использовать $3$ и $4$ подход обсуждаются в последних разделах~\ref{section::Global}.
+Если вам не достаточно того, что могут себе позволить функции, то вероятно вам лучше инкапсюлировать ее работу в объект класса.
+А в этом случае у вас появляются новые способы задания зависимостей, которые будут обсуждаться ниже.
+В целом метод класса хорош тем, что у вас кроме глобальных и локальных переменных, появляются переменные класса, которые являются <<контролируемыми глобальными>> ресурсами в рамках одного объекта.
+
+\subsubsection{Зависимости объектов}
+
+Начнем с простого класса:
+\begin{cppcode}
+class Widget {
+public:
+  ...
+private:
+  ...
+  Localizator loc_;
+};
+\end{cppcode}
+В данном случае у нас есть класс \verb"Widget", который представляет пользователю какой-то графический интерфейс и за текст в открывшихся окнах отвечает объект \verb"loc_" типа \verb"Localizator".
+Мы считаем, что для каждого языка у нас свой локализатор.
+А потому смена языка означает смену локализатора.
+Теперь обсудим, как можно сообщать эту зависимость объекту:
+\begin{enumerate}
+\item В конструкторе.
+Здесь все просто
+\begin{cppcode}
+class Widget {
+public:
+  Widget(const Localizer& loc) : loc_(loc) {}
+  ...
+private:
+  ...
+  Localizator loc_;
+};
+\end{cppcode}
+В этом случае есть возможность установить локализатор, но нет возможности его изменить.
+Так же нельзя создать \verb"Widget" без локализатора.
+Последнее может быть как плюсом, так и минусом.
+
+\item Специальный метод.
+\begin{cppcode}
+class Widget {
+public:
+  void set_localizer(const Localizer& loc) {
+    loc_ = loc;
+  }
+  ...
+private:
+  ...
+  std::optional<Localizator> loc_;
+};
+\end{cppcode}
+По сути то же самое, что и в случае конструктора, только теперь мы можем локализатор менять налету.
+Тут есть одна тонкость: а чем инициализировать в дефолтном конструкторе?
+И тут есть два пути: либо чем-то дефолтным, либо ничем. Но тогда надо внутри \verb"Widget" хранить возможно не инициализированный \verb"Localizer". 
+Это можно сделать либо через \verb"std::unique_ptr" либо через \verb"std::optional".
+А так же нужно, чтобы \verb"Widget" корректно работал при не инициализированном локализаторе.
+Так же можно сделать инициализацию и в конструкторе и по методу.
+
+\item Singleton.
+В данном случае мы просто берем локализатор из какого-то глобального хранилища данных.
+Обычно такой подход  называют \verb"Service Locator".%
+\footnote{Еще одно красивое название для дерьмового кода.}
+\begin{cppcode}
+class Widget {
+public:
+  ...
+  void show() {
+    ...
+    auto& loc = ServiceLocator::instance()->WidgetLocalizator();
+    title_ = loc->title();
+    ...
+  }
+  ...
+private:
+  ...
+};
+\end{cppcode}
+
+\item Observer-Observable.
+Вместо неявной зависимости от \verb"Singleton" в виде \verb"ServiceLocator"-а, давайте соединим \verb"ServiceLocator" и \verb"Widget" с помощью push-уведомления через Observer-Observable паттерн.%
+\footnote{Подробнее про него можно почитать в разделе~\ref{section::Observer}.}
+То есть
+\begin{cppcode}
+class LocalizationModule {
+public:
+  void subscribe(Observer<Localizator>*);
+private:
+  Observable<Localizator> port_;
+  Localizator loc_;
+};
+
+class Widget {
+public:
+  Observer<Localizator>* port();
+  ...
+  void show() {
+    ...
+    title_ = title();
+    ...
+  }
+  ...
+private:  
+  std::string title() const {
+    if (!port_.has_data())  // Need to support this case!
+      return "";
+    return port_->title();  // Take data from localizer received
+  }
+  ...
+  Observer<Localizator> port_;
+};
+\end{cppcode}
+И теперь нам лишь надо соединить два модуля вместе
+\begin{cppcode}
+LocalizationModule loc_module;
+Widget widget;
+loc_module.subscribe(widget.port());
+\end{cppcode}
+Все, теперь в этом месте у нас \verb"Widget" оповещается нужным локализатором и может его использовать.
+\end{enumerate}
+Давайте сделаем несколько замечаний по этим методам.
+\begin{enumerate}
+\item Методы $1$ и $2$ заставляют нас напрямую управлять объектом \verb"Widget" снаружи.
+То есть если у нас сменился локализатор, то надо напрямую дернуть соответствующий метод \verb"Widget", чтобы изменения вступили в силу.
+
+\item Метод $3$ страдает от неявной зависимости от единого \verb"ServiceLocator".
+При таком подходе тяжело сменить какой-то сервис только для одного фиксированного объекта.
+Если мы хотим поменять поведение какого-то сервиса внутри \verb"ServiceLocator", то это увидят все его пользователи.
+
+\item Подход $4$ по сути является улучшенной версией подхода $3$, когда мы получаем данные не из глобального объекта, а из специального модуля, к которому мы явно присоединились.
+Так же огромным достоинством этого подхода является push-оповещение.
+То есть если пользователь меняет язык приложения, то внутри \verb"LocalizationModule" происходят необходимые изменения локализаторов и все подписчики мгновенно оповещаются об этом.
+
+\item В подходе $3$ так же можно реализовать смену как самого \verb"ServiceLocator", так и отдельных его сервисов.
+Однако, при такой замене НЕ происходит уведомление пользующихся им объектов.
+А это значит, что придется ходить и руками дергать у всех пользователей \verb"ServiceLocator"-а служебные методы пересчета своего состояния.
+Кроме того, проблема обостряется тем, что у вас нет никакого способа понять, а кто именно и где пользуется \verb"ServiceLocator"-ом, кроме как пройтись по всей кодовой базе.
+\end{enumerate}
+Я бы никогда не пользовался случаем $3$ за исключением ситуаций описанных в разделе~\ref{section::Global}, а точнее ситуациях аналогичных тем, что описаны в разделах~\ref{section::Logging} и~\ref{section::OpCounting}.
+Например использование глобального Logger-а является хорошим примером для Singleton-а, потому что Logger -- это не часть кода, а это часть тестирующего кода (или собирающего статистику).
+Методы $1$ и $2$ стоит использовать вместе и когда вы снаружи сами управляете объектом.
+Метод $4$ я бы использовал как основной, только он позволяет автоматизировать своевременную реакцию на обновление зависимостей, позволяет менять зависимости налету и не содержит неявных связей между компонентами.
