@@ -1,0 +1,424 @@
+\ProvidesFile{FunctionList.tex}[Списки функций]
+
+
+\subsection{Списки функций}
+\label{section::FunctionList}
+
+\subsubsection{Что мы хотим}
+
+Здесь я хочу обсудить, как работать работать со списком функций во время компиляции.
+Звучит супер просто, учитывая, что мы уже знаем, как хранить произвольные элементы в списке.
+Действительно
+\begin{cppcode}
+namespace AL {
+template<auto...>
+struct List {};
+}
+
+void f(int) {}
+
+struct A {
+  void f() const {}
+};
+
+int main() {
+  using List = AL::List<&f, &A::f>;
+  AL::At<List, 0>(1); // calls f(1)
+  A a;
+  (a.*AL::At<List, 1>)(); // calls a.f()
+}
+\end{cppcode}
+Однако, из-за того, что в языке есть понятие перегрузки функций и операторов, то одним и тем же именем могут называться разные методы.
+Например в следующих ситуациях у нас будет ошибка компиляции.
+\begin{cppcode}
+namespace AL {
+template<auto...>
+struct List {};
+}
+
+void f(int) {}
+
+void f(double) {}
+
+struct A {
+  void f() const {}
+  void f() {}
+};
+
+int main() {
+  using List = AL::List<&f>; // Compilation error ambiguity
+  using List = AL::List<&A::f>; // Compilation error ambiguity
+}
+\end{cppcode}
+Проблема в том, что компилятор не знает, какую из перегруженных функций вы имеете в виду в этом месте.
+Для решения этой проблемы нужно указать явно сигнатуру функции.
+Это делается с помощью \verb"static_cast" следующим образом
+\begin{cppcode}
+using List = AL::List<static_cast<void(*)(int)>(&f)>;
+using List = AL::List<static_cast<void (A::*) const>(&A::f)>; 
+\end{cppcode}
+Как можно заметить в первом случае синтаксис содержит неудобную для использования \verb"(*)", которая не несет информации для программиста, но необходима.
+А во втором случае мы дважды используем имя класса \verb"A": один раз при указании сигнатуры, а второй раз при обращении к адресу метода.
+Наша задача упросить процесс обращения к перегруженным методам.
+Мы бы хотели иметь следующий синтаксис:
+\begin{cppcode}
+using List = AL::List<sig<void(int)>(&f)>; // selects f(int)
+using List = AL::List<sig<void () const>(&A::f)>;  // selects A::f() const
+\end{cppcode}
+
+\subsubsection{Имплементация \texttt{sig}}
+
+Прежде всего начнем с простой шаблонной имплементации:
+\begin{cppcode}
+namespace detail {
+template<class signature>
+struct Sig {
+  static_assert(Logic::False<signature>,
+                "The argument of sig MUST be a valid function signature!");
+};
+
+template<class R, class... Args>
+struct Sig<R(Args...) const> {
+  using consnt_signature = R(Args...) const;
+
+  template<class T>
+  constexpr consnt_signature T::*
+  operator()(consnt_signature T::*f) const noexcept {
+    return static_cast<consnt_signature T::*>(f);
+  }
+};
+
+template<class R, class... Args>
+struct Sig<R(Args...)> {
+  using signature = R(Args...);
+
+  template<class T>
+  constexpr signature T::*operator()(signature T::*f) const noexcept {
+    return static_cast<signature T::*>(f);
+  }
+};
+} // namespace detail
+
+template<class signature>
+detail::Sig<signature> sig = {};
+\end{cppcode}
+Давайте пройдемся по имплементации.
+\begin{enumerate}
+\item Прежде всего обратите, что \verb"sig" является не шаблоном класса, а шаблонной переменной.
+А круглые скобки -- это перегруженный оператор.
+
+\item Как работает оператор \verb"operator()".
+Если пользователь ввел что-то вида
+\begin{cppcode}[numbers = none]
+sig<R(Args...) const>(&A::f);
+\end{cppcode}
+В этом случае
+\begin{cppcode}[numbers = none]
+signature = R(Args...) const
+\end{cppcode}
+А получение из этой сигнатуры указателя на объект класса \verb"T" делается так:
+\begin{cppcode}[numbers = none]
+signature T* = R (T::*)(Args...) const
+\end{cppcode}
+Это просто возможность языка, о которой надо знать.
+
+\item После чего оператор \verb"operator()" принимает только функции с сигнатурой
+\begin{cppcode}[numbers = none]
+R (T::*)(Args...) const
+\end{cppcode}
+для любых классов \verb"T".
+Это позволяет избавиться от необходимости указывать явно тип класса.
+
+\item Аналогичная имплементация для не константного метода.
+Так же заметим, что типы
+\begin{cppcode}[numbers = none]
+R (T::*)(Args...) const
+R (T::*)(Args...)
+\end{cppcode}
+в C++ являются разными и их имплементации нельзя объединить в одну.
+Приходится для каждой из них писать отдельно.
+
+\item Причина использования оператора \verb"operator()" следующая.
+Мы можем задать операцию на элементах по сути двумя способами:
+\begin{enumerate}
+\item Шаблоном
+\begin{cppcode}[numbers = none]
+template<auto arg>
+struct FImpl {
+  static constepxr auto value = /*implementation*/;
+};
+\end{cppcode}
+
+\item С помощью \verb"constexpr" функции
+\begin{cppcode}[numbers = none]
+template<class T>
+constexpr auto function(T arg) { 
+  return /*implementation*/ 
+}
+\end{cppcode}
+\end{enumerate}
+Важная особенность второго подхода в том, что мы можем иметь много разных функций с одним именем, но разной сигнатурой.
+Кроме того, для аргументов функции недостающие шаблонные параметры определяются автоматически.
+Это позволяет не указывать явно класс \verb"T", которому принадлежит метод \verb"f".
+\end{enumerate}
+Теперь мы действительно можем писать код вида
+\begin{cppcode}
+namespace AL {
+template<auto...>
+struct List {};
+}
+
+void f(int) {}
+
+void f(double) {}
+
+struct A {
+  void f() const {}
+  void f() {}
+};
+
+int main() {
+  using List = AL::List<sig<void(int)>(&f), sig<void(double)>(&f), 
+                        sig<void() const>(&A::f), sig<void()>(&A::f)>;
+}
+// List equals AL::List<f(int), f(double), A::f() const, A::f()>
+\end{cppcode}
+
+\subsubsection{Смягчение требований по \texttt{const}}
+
+Давайте рассмотрим следующий набор классов:
+\begin{cppcode}
+struct A {
+  void f() const {}
+  void f() {}
+};
+
+struct B {
+  void f() {}
+};
+
+struct C {
+  void f() const {}
+};
+\end{cppcode}
+Какую из функций можно позвать по сигнатуре ниже?
+\begin{cppcode}[numbers = none]
+void() const
+\end{cppcode}
+Только константные методы \verb"A::f() const" и \verb"C::f() const".
+Позвать \verb"A::f()" и \verb"B::f()" не получится, так как мы не можем менять константный объект.
+С другой стороны, какой из методов мы можем вызвать по сигнатуре такой?
+\begin{cppcode}[numbers = none]
+void()
+\end{cppcode}
+На самом деле тут можно вызвать любой из $4$ методов.
+Это согласуется с тем, что константный метод можно вызывать как на константном, так и на не константном объекте.
+В этом случае мы бы хотели, чтобы сигнатура
+\begin{cppcode}[numbers = none]
+void() const
+\end{cppcode}
+означала выбираем только константный метода, а сигнатура
+\begin{cppcode}[numbers = none]
+void()
+\end{cppcode}
+означает, выбери не константный метод, если он есть, а если нет, то выбери константный метод.
+То есть мы хотим такое поведение:
+\begin{cppcode}
+using List1 = AL::List<sig<void()>(&A::f), sig<void()>(&B::f), sig<void()>(&C::f)>;
+// List1 equals AL::List<A::f(), B::f(), C::f() const>
+
+using List2 =
+    AL::List<sig<void() const>(&A::f), sig<void() const>(&B::f), sig<void() const>(&C::f)>;
+// Compilation error because there is no const B::f method
+\end{cppcode}
+В этом случае имплементация для константной сигнатуры не изменится.
+А вот для не константной сигнатуры надо будет написать так:
+\begin{cppcode}
+
+template<class R, class... Args>
+struct Sig<R(Args...)> {
+  using signature = R(Args...);
+  using const_signature = R(Args...) const;
+
+  template<class T>
+  constexpr const_signature T::*operator()(const_signature T::*f) const volatile noexcept {
+    return static_cast<const_signature T::*>(f);
+  }
+
+  template<class T>
+  constexpr signature T::*operator()(signature T::*f) const noexcept {
+    return static_cast<signature T::*>(f);
+  }
+};
+\end{cppcode}
+При этом вспомним, что
+\begin{cppcode}
+template<class signature>
+detail::Sig<signature> sig = {};
+\end{cppcode}
+Давайте разберем как работает следующий код
+\begin{cppcode}
+constexpr auto f1 = sig<void()>(&A::f);
+constexpr auto f2 = sig<void()>(&B::f);
+constexpr auto f3 = sig<void()>(&C::f);
+\end{cppcode}
+В каждом из этих случаев вызывается оператор \verb"operator()", у которого два аргумента: неявный	 \verb"this" и явный -- адрес метода.
+То есть для компилятора видит вызов вроде такого:
+Давайте разберем как работает следующий код%
+\footnote{Я специально не пишу название пространства имен \verb"detail", чтобы сделать код читаемым.
+По хорошему конечно же надо писать \verb"detail::Sig<void()>" и так далее.}
+\begin{cppcode}
+constexpr auto f1 = Sig<void()>::operator()(&sig<void()>, &A::f);
+constexpr auto f2 = Sig<void()>::operator()(&sig<void()>, &B::f);
+constexpr auto f3 = Sig<void()>::operator()(&sig<void()>, &C::f);
+\end{cppcode}
+
+\paragraph{класс \texttt{A}}
+
+Давайте явно запишем какие операторы получаются в классе \verb"Sig<void()>" после определения шаблонного параметра \verb"T = A".
+Компилятор будет видеть что-то вроде такого:%
+\footnote{Написать \texttt{void (A::)()} конечно не получится, но это идейная запись, для сокращения кода, чтобы он стал понятнее.}
+\begin{cppcode}[numbers = none]
+using const_signature = void (A::)() const;
+const_signature* operator()(const volatile Sig<void()>*, const_signature*)
+// and
+using signature = void (A::)();
+signature operator()(const Sig<void()>*, signature*)
+\end{cppcode}
+И пару \verb"sig<void()>" и \verb"&A::f" можно подставить и в первую и во вторую версию оператора
+Однако, по определению \verb"sig<void()>" является \verb"const", но не \verb"volatile".
+А значит для подстановки во вторую версию нужно использовать меньше кастов.
+Во вторую версию можно сразу подставлять, а для первой версии нужно сделать каст к \verb"volatile".
+Потому компилятор выбирает вторую версию.
+
+\paragraph{класс \texttt{B}}
+
+В в случае с классом \verb"B" все проще.
+Компилятор видит единственную функцию \verb"f" с сигнатурой
+\begin{cppcode}[numbers = none]
+using signature = void (B::)();
+\end{cppcode}
+Которая подходит только под оператор
+\begin{cppcode}[numbers = none]
+signature* operator()(const Sig<void()>*, signature*)
+\end{cppcode}
+А значит будет выбран не константный метод \verb"B::f()".
+
+\paragraph{класс \texttt{C}}
+
+И наконец последний третий вызов для класса \verb"C".
+Тут компилятор видит наоборот только константный метод с сигнатурой
+\begin{cppcode}[numbers = none]
+using const_signature = void (C::)() const;
+\end{cppcode}
+И он подходит только под первый оператор:
+\begin{cppcode}[numbers = none]
+const_signature* operator()(const volatile Sig<void()>*, const_signature*)
+\end{cppcode}
+Ибо второй нарушает \verb"const"-корректность.
+И так как неявный каст к \verb"volatile" разрешен в языке, то выбирается первая версия оператора.
+А потому возвращаемое значение будет единственным константным методом \verb"C::f() const".
+
+\subsubsection{Глобальные функции как методы}
+
+При работе с объектами часто удобно трактовать глобальные функции, как методы класса, считая, что они принимают указатель (или ссылку) на объект в своем первом аргументе:
+\begin{cppcode}
+struct A {};
+
+void f(const A* a, int x) { /*implementation*/ }
+void f(A* a, int x) { /*implementation*/ }
+void f(const A& a, int x) { /*implementation*/ }
+void f(A& a, int x) { /*implementation*/ }
+\end{cppcode}
+Такая трактовка нам может понадобиться для имплементации стирающих типов.
+А именно, если в классе не хватает метода и вы не можете изменить класс объекта, то добавление глобальной функции с особым первым аргументом решит эту проблему.
+Чтобы было понятно, что имеется в виду, я рекомендую посмотреть в раздел~\ref{}, а сейчас я лишь хочу обсудить как сделать выбор перегруженных методов со смягчением требования по \verb"const" для первого аргумента (если он ссылка или указатель).
+Для этого надо сделать дополнительные имплементации для следующих сигнатур:
+\begin{cppcode}[numbers = none]
+R(const Arg1*, Args...)
+R(Arg1*, Args...)
+R(const Arg1&, Args...)
+R(Arg1&, Args...)
+R(Arg1&&, Args...)
+\end{cppcode}
+Это покроет все возможные случаи.
+Так же обратите внимание, что эти случае пересекаются с сигнатурами
+\begin{cppcode}[numbers = none]
+R(Args...)
+\end{cppcode}
+в случае хотя бы одного аргумента.
+То есть вы можете написать
+\begin{cppcode}[numbers = none]
+void f(const A*) {}
+sig<void(const A*)>::(&f);
+// or
+struct A {
+  void f(const A*) {}
+};
+sig<void(const A*)>(&A::f);
+\end{cppcode}
+В обоих случаях должна корректно выбираться нужная функция без ошибки компиляции.
+А это значит, что в сигнатурах, которые мы разбираем сейчас надо рассматривать и глобальные функции и методы классов.
+Я опишу как имплементировать два случая
+\begin{cppcode}[numbers = none]
+R(const Arg1*, Args...)
+R(Arg1*, Args...)
+\end{cppcode}
+Остальные делаются аналогично.
+Надо лишь сказать, что для случая \verb"Arg1&&" не должно быть константной версии, так как нет смысла делать rvalue константой.
+Начнем с константного указателя:
+\begin{cppcode}
+
+template<class R, class Arg1, class... Args>
+struct Sig<R(const Arg1*, Args...)> {
+  using const_signature = R(const Arg1*, Args...) const;
+  using free_const_signature = R(const Arg1*, Args...);
+
+  template<class T>
+  constexpr const_signature T::*
+  operator()(const_signature T::*f) const noexcept {
+    return static_cast<const_signature T::*>(f);
+  }
+
+  constexpr free_const_signature* operator()(free_const_signature* f) const volatile noexcept {
+    return static_cast<free_const_signature*>(f);
+  }
+};
+\end{cppcode}
+Здесь все просто: шаблонный оператор для метода класса и не шаблонный оператор для функции.
+Для не константного аргумента будет
+\begin{cppcode}
+template<class R, class Arg1, class... Args>
+struct Sig<R(Arg1*, Args...)> {
+  using signature = R(Arg1*, Args...);
+  using const_signature = R(Arg1*, Args...) const;
+
+  using free_signature = R(Arg1*, Args...);
+  using free_const_signature = R(const Arg1*, Args...);
+
+  template<class T>
+  constexpr const_signature T::*operator()(const_signature T::*f) const volatile noexcept {
+    return static_cast<const_signature T::*>(f);
+  }
+
+  template<class T>
+  constexpr signature T::*operator()(signature T::*f) const noexcept {
+    return static_cast<signature T::*>(f);
+  }
+
+  constexpr free_const_signature* operator()(free_const_signature* f) const volatile noexcept {
+    return static_cast<free_const_signature*>(f);
+  }
+
+  constexpr free_signature* operator()(free_signature* f) const noexcept {
+    return static_cast<free_signature*>(f);
+  }
+};
+\end{cppcode}
+Здесь так же приоритет задается с помощью \verb"volatile".
+Обратите внимание, что в случае метода класса, мы не ослабляем \verb"const" требования к первому аргументу, что видно из введенных сигнатур:
+\begin{cppcode}
+using signature = R(Arg1*, Args...);
+using const_signature = R(Arg1*, Args...) const;
+\end{cppcode}
+Потому что в этом случае пользователь нам указал в точности нужный тип первого аргумента и константность может быть только в неявном аргументе, который определяется шаблонным параметром \verb"T".
