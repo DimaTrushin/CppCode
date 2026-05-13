@@ -1,7 +1,7 @@
 \ProvidesFile{Classic.tex}[Стирающие ссылки]
 
 
-\subsection{Стирающие ссылки}
+\subsection{Стирающие ссылки}MapFromAL
 \label{section::RefErasure}
 
 Так получилось, что даже в языке Си есть стирающие указатели.
@@ -655,7 +655,7 @@ public:
 По адресу \texttt{this} лежит объект типа \texttt{AnyPtr}, а вызов метода через класс \texttt{Interface}, принимает аргумент \texttt{this} типа \texttt{Interface}.
 Вот это уже делать нельзя.
 
-\subsubsection{Общее шаблонное решение}
+\subsubsection{Идея шаблонного решения}
 
 В предыдущих разделах мы построили класс \texttt{AnyPtr}, в который можно складывать указатель на любой объект, у которого можно вызывать два метода \texttt{f} и \texttt{g} без аргументов и без возвращаемого значения.
 Однако, мы бы хотели теперь настроить наш тип \texttt{AnyPtr} так, чтобы можно было в него передавать любой интерфейс.
@@ -677,4 +677,1232 @@ int main() {
   ptr->g();
 }
 \end{cppcode}
-% TO DO
+Прям так сделать не получится, но можно сделать очень близко к этому.
+У нас будет две точки, в которых должен участвовать пользователь: задание интерфейса и биндинг интерфейса на конкретные методы.
+Давайте покажу как будет выглядеть решение идейно.
+Выше структура \verb"AnyPtr" была жестко задана следующим образом:
+\begin{center}
+\[
+\xymatrix@R10pt{
+  {\verb"AnyPtr"}
+    {
+	\save
+   [].[dd]*+[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{\phantom{\verb"Obj"}}
+   {
+	\save
+   [].[]*+[:<3pt>]\frm{}
+   \restore
+	}
+  &{\phantom{\verb"class A"}}
+  %\ar@/_10pt/[l]
+    {
+	\save
+   [].[dd]*+[:<3pt>]\frm{}
+   \restore
+	}
+  \\
+  {\verb"ptr"}
+   {
+	\save
+   [].[]*+[F-]\frm{}
+   \restore
+	}
+  %\ar[ru]
+  &{}&{\phantom{\verb"void f()"}}
+  %\ar[ldd]+(10,2)
+  \\
+  {\verb"vtable"}
+    {
+	\save
+   [].[]*[F-]\frm{}
+   \restore
+	}
+  \ar@(d,l)[rd]&{}&{\phantom{\verb"void g()"}}
+  %\ar[ldd]+(10,2)
+  \\
+  {}&{\verb"Fptr f\_ = nullptr"}
+    {
+	\save
+   [].[d]*[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{}\\
+  {}&{\verb"Fptr g\_ = nullptr"}&{}\\
+}
+\]
+\end{center}
+И интерфейс в \verb"AnyPtr" мы хардкодили внутри самого класса.
+В начале можно отделить интерфейс с помощью наследования так:
+\begin{center}
+\[
+\xymatrix@R10pt{
+  {\verb"PtrBase"}
+    {
+	\save
+   [].[dd]*+[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{\phantom{\verb"Obj"}}
+   {
+	\save
+   [].[]*+[:<3pt>]\frm{}
+   \restore
+	}
+  &{\phantom{\verb"class A"}}
+  %\ar@/_10pt/[l]
+    {
+	\save
+   [].[dd]*+[:<3pt>]\frm{}
+   \restore
+	}
+  \\
+  {\verb"ptr"}
+   {
+	\save
+   [].[]*+[F-]\frm{}
+   \restore
+	}
+  %\ar[ru]
+  &{}&{\phantom{\verb"void f()"}}
+  %\ar[ldd]+(10,2)
+  \\
+  {\verb"vtable"}
+    {
+	\save
+   [].[]*[F-]\frm{}
+   \restore
+	}
+  \ar@(d,l)[rd]&{}&{\phantom{\verb"void g()"}}
+  %\ar[ldd]+(10,2)
+  \\
+  {}&{\verb"Fptr f\_ = nullptr"}
+    {
+	\save
+   [].[d]*[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{\phantom{\verb"List<\&A::f, \&A::g>"}}%\ar@(ul, ur)[l]
+%  {
+%  \save
+%  *+[F--:<3pt>]
+%  \restore}
+  \\
+  {}&{\verb"Fptr g\_ = nullptr"}&{}\\
+    {\verb"Interface"}\ar[uuu]
+    {
+	\save
+   [].[dd]*+[F--:<3pt>]\frm{}
+   \restore
+	}
+	&{}&{}\\
+	*+[F-]{\verb"void f()"}&{}&{}\\
+	*+[F-]{\verb"void g()"}&{}&{}\\
+}
+\]
+\end{center}
+И теперь нам надо автоматизировать создание таблицы вызываемых функций \verb"vtable".
+Это мы сделаем с помощью списком методов~\ref{section::FunctionList}.
+\begin{center}
+\[
+\xymatrix@R10pt{
+  {\verb"PtrBase"}
+    {
+	\save
+   [].[dd]*+[F-:<3pt>]\frm{}
+   \restore
+	}
+  &{\phantom{\verb"Obj"}}
+   {
+	\save
+   [].[]*+[:<3pt>]\frm{}
+   \restore
+	}
+  &{\phantom{\verb"class A"}}
+  %\ar@/_10pt/[l]
+    {
+	\save
+   [].[dd]*+[:<3pt>]\frm{}
+   \restore
+	}
+  \\
+  {\verb"ptr"}
+   {
+	\save
+   [].[]*+[F-]\frm{}
+   \restore
+	}
+  %\ar[ru]
+  &{}&{\phantom{\verb"void f()"}}
+  %\ar[ldd]+(10,2)
+  \\
+  {\verb"vtable"}
+    {
+	\save
+   [].[]*[F-]\frm{}
+   \restore
+	}
+  \ar@(d,l)[rd]&{}&{\phantom{\verb"void g()"}}
+  %\ar[ldd]+(10,2)
+  \\
+  {}&{\verb"Fptr f\_ = nullptr"}
+    {
+	\save
+   [].[d]*[F-:<3pt>]\frm{}
+   \restore
+	}
+  &*+[F--:<3pt>]{\verb"List<\&A::f, \&A::g>"}\ar@(ul, ur)[l]\\
+  {}&{\verb"Fptr g\_ = nullptr"}&{}\\
+    {\verb"Interface"}\ar[uuu]
+    {
+	\save
+   [].[dd]*+[F--:<3pt>]\frm{}
+   \restore
+	}
+	&{}&{}\\
+	*+[F-]{\verb"void f()"}&{}&{}\\
+	*+[F-]{\verb"void g()"}&{}&{}\\
+}
+\]
+\end{center}
+Со стороны пользователя понадобится имплементировать следующее:%
+\footnote{Тут не обязательно было указывать сигнатуру методов, но для улучшения читаемости, я специально вызвал \verb"sig" шаблон, чтобы уточнить сигнатуру методов.}
+\begin{cppcode}
+struct FG {
+  template<class B>
+  struct Interface : B {
+    void f(int x) const {
+      call<0>(this, x); // calls the first element of Members<T> on this
+    }
+    void g(const B& b) {
+      call<1>(this, b); // calls the second element of on this Members<T>
+    }
+  };
+  template<class T>
+  using Members = AL::List<sig<void(int) const>(&T::f), sig<void(const B&)>(&T::g)>;
+};
+\end{cppcode}
+После чего нужный стирающий указатель будет собираться так
+\begin{cppcode}
+A a;
+AnyPtr<FG> p = &a;
+p->f(1);
+g->g(B{});
+\end{cppcode}
+Теперь можно в \verb"AnyPtr<FG>" складывать указатели на любые классы, где в публичном интерфейсе есть методы
+\begin{cppcode}
+void f(int x) const;
+void g(const B& b);
+\end{cppcode}
+Теперь нам надо объяснить следующие как делать вещи:
+\begin{enumerate}
+\item Создание таблицы виртуальных методов \verb"vtable".
+
+\item Имплементация \verb"AnyPtr" на основе структуры содержащей интерфейс и список методов.
+\end{enumerate}
+
+\subsubsection{Создание таблицы виртуальных методов}
+\label{section::VTableGeneral}
+
+Прежде всего отметим, что в таблице \verb"Members<T>" у нас могут лежать два вида объектов: методы класса \verb"T" или свободные функции, где первый элемент -- указатель или ссылка на \verb"T" или \verb"const T".
+Нам как и раньше надо будет хранить не сами эти методы, а вспомогательные методы, которые принимают \verb"this" явно через \verb"void*" или \verb"const void*".
+
+\paragraph{Идея решения}
+
+Давайте напишем, что мы хотим получить.
+Прежде всего Таблица виртуальных методов будет представлять из себя указатель на \verb"std::tuple", который уже будет содержать нужные методы.
+При этом для каждого типа \verb"T", который складывается в \verb"AnyPtr", такая таблица будет храниться в статической памяти.
+\begin{cppcode}
+class PtrBase {
+  std::tuple<void(*)(const void*, int), void(*)(void*, const B&)>* vtable_ = nullptr;
+};
+\end{cppcode}
+Теперь нужно для каждого типа \verb"T" создать свою таблицу виртуальных вызовов:
+\begin{cppcode}
+template<class T>
+class VTableImpl {
+  static constexpr std::tuple<void(*)(const void*, int), void(*)(void*, const B&)>* vtable_ =
+    {FunctionPtr<&A::f>, FunctionPtr<&A::g>};
+};
+\end{cppcode}
+
+\paragraph{Обертка вокруг метода}
+
+Используемый шаблон \verb"FunctionPtr" как раз строит нужную оболочку вокруг метода класса так:
+\begin{cppcode}
+template<auto f, class = TypeOf<f>>
+struct FunctionPtrImpl {};
+
+template<auto f, class T, class R, class... Args>
+struct FunctionPtrImpl<f, R (T::*)(Args...) const> {
+  using signature = R(const void*, Args...);
+  static constexpr auto value = [](const void* This, Args... args) -> R {
+    return ((cast_this<f>(This))->*(f))(std::forward<Args>(args)...);
+  };
+};
+
+template<auto f, class T, class R, class... Args>
+struct FunctionPtrImpl<f, R (T::*)(Args...)> {
+  using signature = R(void*, Args...);
+  static constexpr auto value = [](void* This, Args... args) -> R {
+    return ((cast_this<f>(This))->*(f))(std::forward<Args>(args)...);
+  };
+};
+
+template<auto f>
+constexpr auto FunctionPtr = FunctionPtrImpl<f>::value;
+
+template<auto f>
+using FunctionSignature = typename FunctionPtrImpl<f>::signature;
+
+template<auto f>
+using FunctionSigPtr = FunctionSignature<f>*;
+\end{cppcode}
+Обратите внимание, что тут есть специальный метод \verb"cast_this" (который мы должны будем имплементировать), который умеет кастовать \verb"This" аргумент к нужному типу, а именно
+\begin{itemize}
+\item если \verb"f" имеет тип \verb"void (A::*)(int) const", то \verb"This" является указателем на \verb"const A".
+
+\item если \verb"f" имеет тип \verb"void (A::*)(const B&)", то \verb"This" является указателем на \verb"A".
+\end{itemize}
+То есть тип метода \verb"f" помнит к чему надо кастовать \verb"This".
+А дальше мы по указателю вызываем метод \verb"f".
+Обратите внимание, что для правильной передачи аргументов внутреннему методу нужно использовать \verb"std::forward", хотя на самих аргументах \verb"Args" не висит универсальная ссылка.
+Для поддержки свободных функций нам еще понадобятся шаблоны такого вида:
+\begin{cppcode}
+template<auto f, class R, class Arg1, class... Args>
+struct FunctionPtrImpl<f, R (*)(const Arg1*, Args...)> {
+  using signature = R(const void*, Args...);
+  static constexpr auto value = [](const void* This, Args... args) -> R {
+    return f(cast_this<f>(This), std::forward<Args>(args)...);
+  };
+};
+\end{cppcode}
+Надо пройтись по следующим сигнатурам:
+\begin{cppcode}[numbers = none]
+R (*)(const Arg1*, Args...)
+R (*)(Arg1*, Args...)
+R (*)(const Arg1&, Args...)
+R (*)(Arg1&, Args...)
+R (*)(Arg1&&, Args...)
+\end{cppcode}
+
+\paragraph{Метод \texttt{cast\_this}}
+
+Теперь обсудим, как именно надо кастовать \verb"This" к нужному типу.
+Сам метод будет иметь вид
+\begin{cppcode}
+template<auto f>
+constexpr auto cast_this(auto* This) {
+  return CasterImpl<Values::TypeOf<f>>::cast(This);
+}
+\end{cppcode}
+Имплементации для методов класса выглядят так:
+\begin{cppcode}
+template<class F>
+struct CasterImpl { /*Error reporting via static_assert*/ };
+
+template<class T, class R, class... Args>
+struct CasterImpl<R (T::*)(Args...) const> {
+  static constexpr const T* cast(const void* This) {
+    return static_cast<const T*>(This);
+  }
+};
+
+template<class T, class R, class... Args>
+struct CasterImpl<R (T::*)(Args...)> {
+  static constexpr T* cast(void* This) {
+    return static_cast<T*>(This);
+  }
+};
+\end{cppcode}
+Опять же, если вы хотите поддерживать свободные функции, то вам придется добавить еще имплементации для следующих сигнатур:
+\begin{cppcode}
+R (*)(const Arg1*, Args...)
+R (*)(Arg1*, Args...)
+R (*)(const Arg1&, Args...)
+R (*)(Arg1&, Args...)
+R (*)(Arg1&&, Args...)
+\end{cppcode}
+Вот например как имплементируется первая из них:
+\begin{cppcode}
+template<class R, class Arg1, class... Args>
+struct CasterImpl<R (*)(const Arg1*, Args...)> {
+  static constexpr const Arg1* cast(const void* This) {
+    return static_cast<const Arg1*>(This);
+  }
+};
+\end{cppcode}
+
+\paragraph{Таблица виртуальных методов}
+
+Теперь я напишу код для создания таблицы виртуальных методов
+\begin{cppcode}
+template<class TList>
+struct VTableImpl { /*Error message vis static_assert*/ };
+
+template<template<auto...> class TList, auto... fs>
+struct VTableImpl<TList<fs...>> {
+  using List = TList<fs...>;
+  using FuncList = AL::MapT<FunctionPtrImpl, List>;
+  using SigList = TL::MapFromAL<FunctionSigPtr, List>;
+  using TableType = TL::Convert<SigList, std::tuple>;
+  
+  static constexpr TableType value = With<TableType, FuncList>::init();
+};
+\end{cppcode}
+Давайте разбираться, что тут написано.
+\begin{enumerate}
+\item Мы заводим шаблон \verb"VTableImpl", который определен только в случае, если его аргумент является списком из произвольных элементов.
+Можно еще повесить проверку, что все элементы либо методы одного класса, либо функции принимающие ссылку или указатель на объект этого же класса в первом аргументе.
+Я оставлю это в качестве упражнения на подумать.
+Кроме того, без проверок код будет короче и легче читаться.
+
+\item В первой строке специализации мы просто заводим псевдоним для списка, хранящего методы.
+\begin{cppcode}[numbers = none]
+using List = TList<fs...>;
+\end{cppcode}
+В нашем примере будет
+\begin{cppcode}[numbers = none]
+using List = TList<&T::f, &T::g>;
+//decltype(&T::f) = void(T::*)(int) const;
+//decltype(&T::g) = void(T::*)(const B&);
+\end{cppcode}
+
+\item Теперь в строке
+\begin{cppcode}[numbers = none]
+using FuncList = AL::MapT<FunctionPtrImpl, List>;
+\end{cppcode}
+Мы преобразуем каждый метод в функцию обертку. В итоге будем иметь список из оберток, которые должны лежать в таблице виртуальных методов.
+\begin{cppcode}[numbers = none]
+using FuncList = TList<FunctionPtr<&T::f>, FunctionPtr<&T::g>>;
+\end{cppcode}
+Где первый элемент в списке будет
+\begin{cppcode}[numbers = none]
+// AL::At<FuncList, 0> equals
+[](const void* This, int x) -> void {
+    cast_this<f>(This)->f(std::forward<int>(x));
+}
+\end{cppcode}
+Здесь \verb"f" означает \verb"T::f" для некоторого \verb"T".
+Тогда \verb"cast_this<f>(This)" будет кастовать к типу \verb"const T&".
+И потом у этого типа по имени \verb"f" будет вызываться метод \verb"T::f".
+Аргумент \verb"x" будет скастован к \verb"int&&", но это ни на что не повлияет, так как \verb"T::f" и так принимает аргумент по значению.
+Вторая же обертка будет выглядеть так:
+\begin{cppcode}[numbers = none]
+// AL::At<FuncList, 1> equals
+[](void* This, const B& b) -> void {
+    cast_this<g>(This)->g(std::forward<B>(b));
+}
+\end{cppcode}
+Здесть как и выше \verb"g" означает \verb"T::g".
+Теперь \verb"This" будет скастован в \verb"T*".
+А аргумент \verb"b" так и останется константной ссылкой без изменения.
+
+\item Дальше определяем сигнатуры методов оберток
+\begin{cppcode}[numbers = none]
+using SigList = TL::MapFromAL<FunctionSigPtr, List>;
+\end{cppcode}
+Обратите внимание, что мы начинаем со списка элементов, а в результате возвращается список типов.
+Потому у нас не просто метод \verb"Map", а его отдельная версия.
+Ее имплементация делается по аналогии с обычным \verb"Map", который обсуждался в разделе~\ref{section::TListOpsImpl}.
+В нашем примере будет следующий список
+\begin{cppcode}[numbers = none]
+using SigList = TL::List<void(*)(const void*, int), void(*)(void*, const B&)>;
+\end{cppcode}
+
+\item Теперь надо объявить \verb"std::tuple" для хранения всех функций из нашей таблицы.
+Это мы делаем заменой \verb"TL::List" на \verb"std::tuple" методом \verb"Convert" так:
+\begin{cppcode}[numbers = none]
+using TableType = TL::Convert<SigList, std::tuple>;
+\end{cppcode}
+И в итоге получаем, что
+\begin{cppcode}[numbers = none]
+using TableType = std::tuple<void(*)(const void*, int), void(*)(void*, const B&)>;
+\end{cppcode}
+
+\item И теперь последняя часть -- инициализация статической константной таблицы для данного списка.
+\begin{cppcode}[numbers = none]
+static constexpr TableType value = With<TableType, FuncList>::init();
+\end{cppcode}
+Имплементация метода инициализации следующая:
+\begin{cppcode}
+template<class TableType, class TList>
+struct With;
+
+template<class TableType, template<auto...> class TList, auto... fs>
+struct With<TableType, TList<fs...>> {
+  static constexpr auto init() {
+    return TableType{fs...};
+  }
+};
+\end{cppcode}
+Тут мы пользуемся aggretate initialization для \verb"std::tuple".
+При этом обратите внимание, что в списке элементы \verb"fs..." являются уже обертками вокруг методов класса.
+В случае нашего примера код превращается в
+\begin{cppcode}
+struct With<TableType, FuncList> {
+static constexpr auto init() {
+  return TableType{AL::At<FuncList, 0>, AL::At<FuncList, 1>}
+};	
+// AL::At<FuncList, 0> equals FunctionPtr<&T::f>  
+// AL::At<FuncList, 1> equals FunctionPtr<&T::g>  
+\end{cppcode}
+\end{enumerate}
+
+\subsubsection{Общая идея имплементации \texttt{AnyPtr}}
+
+\paragraph{Общая идея имплементации}
+
+Давайте я начну с общей диаграммы
+\[
+\xymatrix@R8pt@C20pt{
+ {\verb"PtrBase"}
+  {
+	\save
+   [].[dd]*+[F-:<3pt>]\frm{}
+   \restore
+  }
+ &{\verb"Interface"}\ar[l]+(9,0)
+     {
+	\save
+   [].[dd]*+<2.5pc,0pt>[F--:<3pt>]\frm{}
+   \restore
+  }
+ &{\verb"AnyPtr"}\ar[l]+(14,0)
+  {
+	\save
+   [].[dd]*+<2.5pc,0pt>[F-:<3pt>]\frm{}
+   \restore
+  }
+ \\
+  *+[F-]{\verb"ptr"}\ar@/_30pt/[ddd]
+  &{\verb"void f() const"}
+  &{\verb"operator->"}
+  \\
+  *+[F-]{\verb"vtable"}\ar@/_10pt/[dr]
+  &{\verb"void g()"}
+  &{}
+  \\
+  {}
+  &{\verb"Fptr f = \&A::f"}
+  {
+	\save
+   [].[d]*+[F-:<3pt>]\frm{}
+   \restore
+  }
+  &{}
+  \\
+  *+[F-:<3pt>]{\verb"A object"}
+  &{\verb"Fptr g = \&A::g"}
+  &{}
+  \\
+}
+\]
+Сделаем несколько замечаний по этой диаграмме:
+\begin{enumerate}
+\item В этой диаграмме верхняя строка показывает классы, а стрелки указывают кто от кого унаследован.
+При этом пунктиром указан шаблонный класс, который должен предоставить пользователь.
+
+\item В классе \verb"PtrBase" всего два поля \verb"ptr" указывает на текущий объект и \verb"vtable" хранит указатель на таблицу методов для данного объекта.
+Если \verb"PtrBase" пуст, то оба указателя равны \verb"nullptr".
+
+\item В \verb"AnyPtr" перегружается оператор \verb"operator->", который возвращает указатель на \verb"Interface<PtrBase>".
+Таким образом методы становятся доступными по <<стрелке>>:
+\begin{cppcode}[numbers = none]
+A a;
+AnyPtr<Interface<PtrBase>> p = &a;
+p->f();
+p->g();
+\end{cppcode}
+Так же мы используем конструктор от указателя на объект.
+\end{enumerate}
+От пользователя мы ожидаем код:
+\begin{cppcode}
+struct FG {
+  template<class B>
+  struct Interface : B { // it is important to have public inheritance
+    void f(int x) const {
+      call<0>(this, x); // calls the first element of Members<T> on this
+    }
+    void g(const B& b) {
+      call<1>(this, b); // calls the second element of on this Members<T>
+    }
+  };
+  template<class T>
+  using Members = AL::List<sig<void(int) const>(&T::f), sig<void(const B&)>(&T::g)>;
+};
+\end{cppcode}
+
+\paragraph{Проблемы имплементации}
+
+Давайте опишем несколько сложностей, с которыми придется бороться.
+\begin{enumerate}
+\item Тип \verb"ptr" внутри \verb"PtrBase".
+Надо хранить тип в виде \verb"void*" или \verb"const void*"?
+
+\item Как из шаблона \verb"Members" не зная конкретный тип \verb"T" вычленить сигнатуры всех методов?
+
+\item Как пробросить конструкторы из \verb"PtrBase" в \verb"AnyPtr", чтобы не заставлять пользователя делать проброску в \verb"Interface"?
+
+\item В имплементации выше отсутствует \verb"const"-корректность.
+А именно, в коде ниже
+\begin{cppcode}
+A a;
+const AnyPtr<Interface<PtrBase>> p = &a;
+p->f(); // OK
+p->g(); // Compilation error g is non-const method
+\end{cppcode}
+Получается, что константность указателя превращается в константность данных по указателю.
+А это не то поведение, которое мы бы хотели.
+\end{enumerate}
+
+\paragraph{Имплементация \texttt{PtrBase}}
+
+Теперь давайте я накидаю имплементацию по модулю этих проблем.
+\begin{cppcode}
+template<class Data>
+class PtrBase {
+protected:
+  template<class T>
+  using Members = typename Data::template Members<T>;
+  using VPtr = ??;
+  using TableType = ??;
+public:
+  PtrBase() = default;
+  template<NonVoidClass T>
+  PtrBase(T* ptr);
+  PtrBase(const PtrBase&) = default;
+  PtrBase& operator=(const PtrBase&) = default;
+  PtrBase(PtrBase&& other) noexcept;
+  PtrBase& operator=(PtrBase&& other) noexcept;
+  ~PtrBase() = default;
+  
+protected:
+  VPtr ptr_ = nullptr;
+  const TableType* vtable_ = nullptr;
+};
+\end{cppcode}
+Здесь \verb"Data" -- это класс, который пользователь передает нам.
+Он содержит \verb"Interface" и \verb"Members".
+Так же я пока пропустил определение типов для \verb"VPtr" и \verb"TableType".
+Давайте напишем имплементацию не дефолтных методов:
+\begin{cppcode}
+template<NonVoidClass T>
+PtrBase(T* ptr) : ptr_(ptr), vtable_(&vTable<Members<T>>) {
+}
+\end{cppcode}
+Здесь \verb"NonVoidClass" -- является концептом, который нужен для запрета передачи указателя на \verb"void" в конструкторе.%
+\footnote{Мы его уже встречали в разделе~\ref{section::RefErasureImpl}, потому я не буду рассказывать его имплементацию тут.}
+Здесь мы запоминаем адрес объекта (и кастуем его в \verb"VPtr", который либо \verb"const void*" либо \verb"void*", это мы обсудим позже).
+Мув операции я переопределяю, потому что я хочу, чтобы после мува указателя, он становился пустым.
+\begin{cppcode}
+  PtrBase(PtrBase&& other) noexcept
+      : ptr_(std::exchange(other.ptr_, nullptr)),
+        vtable_(std::exchange(other.vtable_, nullptr)) {
+  }
+  PtrBase& operator=(PtrBase&& other) noexcept {
+    ptr_ = std::exchange(other.ptr_, nullptr);
+    vtable_ = std::exchange(other.vtable_, nullptr);
+    return *this;
+  }
+\end{cppcode}
+Так как мы будем сообщать пользователю тип вида
+\begin{cppcode}[numbers = none]
+Interface<PtrBase<Data>>*
+\end{cppcode}
+То нам важно не помещать в публичный интерфейс ничего лишнего, чтобы оно не было доступно по этому указателю.
+
+\paragraph{Имплементация \texttt{AnyPtr}}
+
+Теперь вот как будет выглядеть \verb"AnyPtr" в первом приближении:
+\begin{cppcode}
+template<class Data>
+class AnyPtr : Data::template Interface<PtrBase<Data>> {
+private:
+  using Base = Data::template Interface<PtrBase<Data>>;
+  using UInterface = Base*;
+  using CUInterface = const Base*;
+
+public:
+  template<NonVoidClass T>
+  AnyPtr(T* ptr) noexcept;
+  
+  operator bool() const noexcept;
+  void reset() noexcept;
+  AnyPtr& operator=(std::nullptr_t) noexcept;
+  bool operator==(std::nullptr_t) const noexcept;
+  bool operator!=(std::nullptr_t) const noexcept;
+
+  UInterface operator->() noexcept;
+  CUInterface operator->() const noexcept;
+};
+\end{cppcode}
+Обратите внимание, что мы наследуемся приватно от интерфейса, а значит его методы не будут светиться среди методов \verb"AnyPtr".
+Мы добавляем стандартный конструктор от указателя:
+\begin{cppcode}
+template<NonVoidClass T>
+AnyPtr(T* ptr) noexcept : Base{ptr} { }
+\end{cppcode}
+В имплементации просто пробрасываем до конструктора в базовом классе.
+И тут мы используем для базового класса \verb"Interface<PtrBase>" aggretate initialization (фигурные скобки), а уже его базовый класс \verb"PtrBase" инициализируется с помощью \verb"ptr", для чего используется конструктор от указателя для \verb"PtrBase".
+Таким образом мы сразу решили проблему проброски конструкторов.
+Именно для этого надо, чтобы \verb"Interface" не содержал данных и был публично унаследован от своей базы \verb"PtrBase".
+
+Теперь методы сравнения имплементируются так:
+\begin{cppcode}
+operator bool() const noexcept {
+  return Base::vtable_;
+}
+bool operator==(std::nullptr_t) const noexcept {
+  return !static_cast<bool>(*this);
+}
+bool operator!=(std::nullptr_t) const noexcept {
+  return !(*this == nullptr);
+}
+\end{cppcode}
+Сброс до пустого указателя выглядит так:
+\begin{cppcode}
+void reset() noexcept {
+  Base::ptr_ = nullptr;
+  Base::vtable_ = nullptr;
+}
+AnyPtr& operator=(std::nullptr_t) noexcept {
+  reset();
+  return *this;
+}
+\end{cppcode}
+И оператор стрелка для получения доступа к интерфейсу
+\begin{cppcode}
+UInterface operator->() noexcept {
+  return this;
+}
+CUInterface operator->() const noexcept {
+  return this;
+}
+\end{cppcode}
+Обратите внимание, что тут как раз возникает проблема, я не могу в \verb"const" версии вернуть не константный интерфейс.
+С этой проблемой будем бороться отдельно позже.
+
+\paragraph{Диспетчеризация и метод \texttt{call<N>}}
+
+Напомним, что пользователь пишет имплементацию интерфейса так:
+\begin{cppcode}
+template<class B>
+struct Interface : B { // it is important to have public inheritance
+  void f(int x) const {
+    call<0>(this, x); // calls the first element of Members<T> on this
+  }
+  void g(const B& b) {
+    call<1>(this, b); // calls the second element of on this Members<T>
+  }
+};
+\end{cppcode}
+Теперь нам надо имплементировать функцию \verb"call", чтобы вызывать нужные методы из \verb"vtable_" на \verb"ptr_".
+У нас уже есть все что для этого требуется.
+\begin{cppcode}
+template<int ind, class T, class... Args>
+auto call(T* This, Args... args) {
+  return std::get<ind>(*This->vtable_)(This->ptr_, std::forward<Args>(args)...);
+}
+\end{cppcode}
+Здесь мы знаем, что нам обязательно скормили класс вида \verb"Interface<PtrBase>".
+А потому мы можем обратиться к его полям \verb"vtable_" и \verb"ptr_".
+Вот этот кусок
+\begin{cppcode}[numbers = none]
+auto func = std::get<ind>(*This->vtable_);
+\end{cppcode}
+Находит функцию из таблицы под номером \verb"ind".
+А дальше эта функция вызывается с аргументами
+\begin{cppcode}[numbers = none]
+return func(This->ptr_, std::forward<Args>(args)...);
+\end{cppcode}
+Здесь нам надо обязательно сделать perfect forwarding аргументов для корректной передачи аргументов.
+Теперь есть одна проблема -- эта функция обращается к \verb"protected" полям класса.
+Теперь придется ее объявить другом для \verb"PtrBase" для всех параметров.
+\begin{cppcode}
+template<class Data>
+class PtrBase {
+  template<int ind, class T, class... Args>
+  friend auto call(T* This, Args... args);
+  ...
+};
+\end{cppcode}
+Здесь мы конечно делаем ее другом для всех значений параметров, но я не хочу тут вымучивать подбор только тех параметров, для которых эта функция должна быть другом, хотя я думаю это можно сделать кое-какими трюками.
+Ура все основные компоненты написаны и осталось решить всего лишь $4$ проблемы имплементации.
+Сразу скажу, что нам придется изменить детали имплементации выше, потому что в том виде, в котором написано решение оно работать не будет.
+Но изменения будут не большими и я покажу почему они нужны, как сделать нужные изменения, и почему эти изменения будут работать как надо.
+
+\subsubsection{Восстановление типов \texttt{Vptr} и \texttt{TableType}}
+
+Давайте рассмотрим два случая, которые может задать пользователь:
+\begin{center}
+\begin{tabular}{cc}
+{\textbf{Только константные методы}}&{\textbf{Есть не константный метод}}\\
+{
+\begin{minipage}[\baselineskip]{8cm}
+\begin{cppcode}[numbers = none]
+struct FG {
+  template<class B>
+  struct Interface : B {
+    void f() const  {
+      call<0>(this);
+    }
+    int g() const {
+      return call<1>(this);
+    }
+  };
+  
+  template<class T>
+  using Members = List<&T::f, &T::g>;
+};
+\end{cppcode}
+\end{minipage}
+}&{
+\begin{minipage}[\baselineskip]{8cm}
+\begin{cppcode}[numbers = none]
+struct FG {
+  template<class B>
+  struct Interface : B {
+    void f() const  {
+      call<0>(this);
+    }
+    int g() {
+      return call<1>(this);
+    }
+  };
+  
+  template<class T>
+  using Members = List<&T::f, &T::g>;
+};
+\end{cppcode}
+\end{minipage}
+}
+\end{tabular}
+\end{center}
+В первом случае оба метода можно вызвать как на константном, так и на не константном объекте.
+А вот во втором случае оба второй метод возможно вызвать только на не константном объекте.
+Потому во втором случае точно надо хранить \verb"void*".
+В первом же вроде можно и то и другое.
+Однако, в этом случае лучше хранить \verb"const void*" и связано это вот с чем.
+Рассмотрим вот такое использование:
+\begin{cppcode}
+struct A {
+  void f() const {}
+  int g() const { return 0; }
+};
+
+A a1;
+AnyPtr<FG> ptr1 = &a1;
+ptr1->f();
+ptr1->g();
+// and the const version
+const A a2;
+AnyPtr<FG> ptr2 = &a2; // This does not compile if ptr_ is not const inside AnyPtr
+ptr1->f();
+ptr1->g();
+\end{cppcode}
+Обратите внимание, что если мы храним внутри \verb"AnyPtr" не константный указатель \verb"void*", то $12$ строчка не скомпилируется.
+Так как мы попытаемся присвоить \verb"const A*" к \verb"void*".
+Если же мы храним внутри \verb"const void*", то оба конструктора отработают корректно.
+Таким образом все что нам надо знать -- это верно ли, что все методы в таблице \verb"vtable_" имеют первый указатель константным указателем или есть хотя бы один не константный указатель.
+А для этого нам надо знать \verb"TableType".
+
+Чтобы восстановить \verb"TableType" нам надо знать сигнатуры всех методов в \verb"Members".
+Но \verb"Members" является шаблоном, а не классом.
+А потому нам надо подставить в него какой-то класс \verb"T", у которого в интерфейсе гарантированно есть все нужные методы.
+Но если пользователь правильно предоставил нам \verb"Interface", то у любого класса \verb"Interface<B>" в интерфейсе есть все необходимые методы.
+Потому можно было бы сделать \verb"B" пустым классом и написать следующее
+\begin{cppcode}
+struct Empty {};
+using EPtr = Interface<Empty>;
+using EMembers = Members<EPtr>;
+\end{cppcode}
+В этом месте возникает первая проблема.
+Дело в том, что пользовательская имплементация выглядит так
+\begin{cppcode}
+template<class B>
+struct Interface : B {
+  void f() const  {
+    call<0>(this);
+  }
+  int g() {
+    return call<1>(this);
+  }
+};
+\end{cppcode}
+В частности, внутри каждого метода мы обращаемся к методу \verb"call", который в нашей имплементации обращается к полям \verb"ptr_" и \verb"vtable_" внутри \verb"B".
+\begin{cppcode}[numbers = none]
+template<int ind, class T, class... Args>
+auto call(T* This, Args... args) {
+  return std::get<ind>(*This->vtable_)(This->ptr_, std::forward<Args>(args)...);
+}
+\end{cppcode}
+В этом месте будет ошибка компиляции для типа \verb"Interface<Empty>".
+Чтобы это исправить, нам надо специализировать этот метод для этого случая и сделать вызов \verb"call" заглушкой, потому что мы его не будем никогда вызывать на таком интерфейсе.
+Для этого завернем \verb"This" во вспомогательный класс \verb"ProxyPtr", который будет специализирован для случая \verb"Interface<Empty>".
+В начале общее решение
+\begin{cppcode}
+template<class T>
+class ProxyPtr {
+public:
+  ProxyPtr(T* ptr) : ptr_(ptr) {
+  }
+
+  template<int ind, class... Args>
+  auto call(Args... args) const {
+    return std::get<ind>(*ptr_->vtable_)(ptr_->ptr_, std::forward<Args>(args)...);
+  }
+
+private:
+  T* ptr_;
+};
+\end{cppcode}
+И метод \verb"call" может быть переписан так
+\begin{cppcode}
+template<int ind, class T, class... Args>
+auto call(T* This, Args... args) {
+  return ProxyPtr<T>(This).template call<ind>(std::forward<Args>(args)...);
+}
+\end{cppcode}
+Но, теперь методы класса \verb"ProxyPtr" должны иметь доступ к \verb"protected" полям класса \verb"PtrBase".
+Решим эту проблему грубо: объявим \verb"ProxyPtr" другом для \verb"PtrBase".
+При этом теперь можно убрать из друзей сам метод \verb"call".
+\begin{cppcode}
+template<class Data>
+class PtrBase {
+protected:
+  ...
+  template<class T, bool>
+  friend class ProxyPtr;
+  ...
+  public:
+  ...
+\end{cppcode}
+На данный момент ничего не изменилось, мы лишь добавили возможность поменять поведение \verb"call" для разных \verb"T".
+Как проверить, что нам дали класс вида \verb"Interface<Empty>"?
+В точности это мы проверить не можем.
+Но если \verb"Empty" -- служебный класс доступный только нам авторам библиотечного кода, то пользователь никогда не сможет от него унаследоваться.
+А это значит, что мы можем определить \verb"Interface<Empty>" как класс, который имеет \verb"Empty" в качестве базового класса.
+Это будет работать, если мы сами в библиотеке не определим какой-то другой левый шаблон \verb"Something<Empty>" и не скормим его функции \verb"call".
+Тогда делаем следующую правку:
+\begin{cppcode}
+template<class T, bool hasEmptyBase = std::is_base_of_v<Empty, T>>
+class ProxyPtr {
+  /*implementation*/
+  };
+  
+template<class T>
+class ProxyPtr<T, true> {
+public:
+
+  ProxyPtr(T* ptr) : ptr_(ptr) {
+  }
+  
+  template<int ind, class... Args>
+  auto call(Args...) const {
+    /*implementation*/
+  }
+
+private:
+  T* ptr_;
+};  
+\end{cppcode}
+Вот теперь мы специализировали шаблон для всех типов имеющих \verb"Empty" в качестве базового.
+Теперь надо имплементировать \verb"call" так, чтобы оно всегда компилировалось.
+Если возвращаемое значение \verb"void", то делать нечего, можно оставить поле пустым.
+А что делать, если надо вернуть значение какого-то типа?
+В этом случае можно просто вернуть вспомогательный класс, который умеет конвертироваться к чему угодно.
+А именно:
+\begin{cppcode}
+template<class T>
+class ProxyPtr<T, true> {
+public:
+  struct Convertible {
+    template<class U>
+    operator U&() const;
+    template<class U>
+    operator U&&() const;
+  };
+
+  ProxyPtr(T* ptr) : ptr_(ptr) {
+  }
+  
+  template<int ind, class... Args>
+  auto call(Args...) const {
+    return Convertible{};
+  }
+
+private:
+  T* ptr_;
+};
+\end{cppcode}
+Теперь строчка
+\begin{cppcode}
+using EMembers = Members<EPtr>;
+\end{cppcode}
+Компилируется.
+А значит, теперь это конкретный список функций.
+В примере выше, это будет
+\begin{cppcode}[numbers = none]
+EMembers = List<&EPtr::f, &EPtr::g>
+\end{cppcode}
+Теперь можно применить операцию
+\begin{cppcode}[numbers = none]
+using SigList = TL::MapFromAL<FunctionSigPtr, EMembers>;
+\end{cppcode}
+для получения сигнатур всех методов (\verb"MapFromAL" и \verb"FunctionSigPtr" описаны в разделе~\ref{section::VTableGeneral}).
+Теперь
+\begin{cppcode}[numbers = none]
+using SigList = List<void(const void*, int(void*)>;
+\end{cppcode}
+Это уже типы хранящиеся в таблице типов.
+Теперь отсюда можно легко вытащить и тип таблицы \verb"TableType" и тип указателя \verb"VPtr".
+Первый получается так:
+\begin{cppcode}[numbers = none]
+using TableType = TL::Convert<SigList, std::tuple>;
+// TableType equals std::tuple<void(const void*, int(void*)>;
+\end{cppcode}
+А для получения \verb"VPtr" надо проверить есть ли хотя бы один указатель на неконстантный объект в качестве первого аргумента.
+Для начала определим шаблон, который проверят для фиксированной сигнатуры условие, что первый аргумент указывает на константный объект или нет.
+\begin{cppcode}
+namespace detail {
+template<auto f, class = Values::TypeOf<f>>
+struct isThisConstImpl {
+  /*Error message, calling the method on a non appropriate type*/
+};
+
+template<auto f, class T, class R, class... Args>
+struct isThisConstImpl<f, R (T::*)(Args...) const> : Values::Bool_t<true> {};
+
+template<auto f, class T, class R, class... Args>
+struct isThisConstImpl<f, R (T::*)(Args...)> : Values::Bool_t<false> {};
+
+template<auto f, class R, class Arg1, class... Args>
+struct isThisConstImpl<f, R (*)(const Arg1*, Args...)> : Values::Bool_t<true> {
+};
+
+template<auto f, class R, class Arg1, class... Args>
+struct isThisConstImpl<f, R (*)(Arg1*, Args...)> : Values::Bool_t<false> {};
+
+template<auto f, class R, class Arg1, class... Args>
+struct isThisConstImpl<f, R (*)(const Arg1&, Args...)> : Values::Bool_t<true> {
+};
+
+template<auto f, class R, class Arg1, class... Args>
+struct isThisConstImpl<f, R (*)(Arg1&, Args...)> : Values::Bool_t<false> {};
+
+template<auto f, class R, class Arg1, class... Args>
+struct isThisConstImpl<f, R (*)(Arg1&&, Args...)> : Values::Bool_t<false> {};
+} // namespace detail 
+
+template<auto f>
+struct isThisConst_t : detail::isThisConstImpl<f, Values::TypeOf<f>> {};
+
+template<auto f>
+constexpr bool isThisConst = isThisConst_t<f>::value;
+
+template<class WF>
+struct isThisConst_w : isThisConst_t<WF::value> {};
+
+template<class WF>
+constexpr bool isThisConst_u = isThisConst_w<WF>::value;
+\end{cppcode}
+В этом случае мы знаем, что в таблице хранятся только указатели на функции (НЕ методы конкретного класса).
+Тем не менее, для полноты, я привожу имплементацию, которая проверяет и методы класса на константность \verb"this" аргумента.
+Так же я определяю все $4$ версии для шаблона снаружи.
+
+Теперь надо найти для контейнера \verb"Members<EPtr>" верно ли, что все первые аргументы ссылаются на \verb"const" объект.
+Это можно имплементировать так:
+\begin{cppcode}
+template<bool a, bool b>
+struct And2_t : And_t<a, b> {};
+
+template<class TList, bool isList = AL::isList<TList>>
+struct isThisConstForAll_t {
+  static_assert(
+      AL::isList<TList>,
+      "The first argument of isThisConstForAll MUST be an element list!");
+};
+
+template<class TList>
+struct isThisConstForAll_t<TList, true>
+    : AL::FoldLT_t<And2_t, true, AL::MapT<isThisConst_t, TList>> {};
+
+template<class TList>
+constexpr bool isThisConstForAll = isThisConstForAll_t<TList>::value;
+\end{cppcode}
+Обратите внимание, что здесь мы используем \verb"And2_t", который ранее  не обсуждали.
+Причина в том, что шаблон \verb"FordLT" требует в качестве бинарной операции шаблон вида
+\begin{cppcode}
+template<auto x, auto y>
+struct Op;
+\end{cppcode}
+А наш шаблон \verb"And_t" был вида
+\begin{cppcode}
+template<auto... Es>
+struct Op;
+\end{cppcode}
+и потому не скомпилируется при попытке подставить его в \verb"FoldLT".
+Теперь тип \verb"VPtr" можно определить следующим образом:
+\begin{cppcode}
+using VPtr = Logic::IfElse<isThisConstForAll<EMembers>, const void*, void*>;
+\end{cppcode}
+
+\subsubsection{\texttt{const} корректность}
+
+Это самая простая часть.
+Давайте вспомним, что у нас за проблема.
+\begin{cppcode}
+template<class B>
+struct Interface : B { // it is important to have public inheritance
+  void f(int x) const {
+    call<0>(this, x); // calls the first element of Members<T> on this
+  }
+  void g(const B& b) {
+    call<1>(this, b); // calls the second element of on this Members<T>
+  }
+};
+\end{cppcode}
+И имплементация указателя была следующей:
+\begin{cppcode}
+template<class Data>
+class AnyPtr : Data::template Interface<PtrBase<Data>> {
+private:
+  using Base = Data::template Interface<PtrBase<Data>>;
+
+public:
+
+  ...
+  Base* operator->() noexcept {
+    return this;
+  }
+  const Base* operator->() const noexcept {
+    return this;
+  }
+};
+\end{cppcode}
+Проблема в этом тут в том, что если сам указатель \verb"AnyPtr" был константным, то мы не сможем вызвать на нем указатель на неконстантный метод из зафиксированного интерфейса.
+То есть \verb"const" пробрасывается сквозь указатель, что плохо.
+То есть \verb"AnyPtr" может быть константным, но внутри него \verb"ptr_" не константный.
+Чтобы решить эту проблему, давайте возвращать не указатель на базовый класс, а вспомогательный не константный объект с оператором \verb"operator->" и который будет хранить не константный \verb"ptr_" из оригинального объекта (и еще и таблицу \verb"vtable_").
+Чтобы обеспечить объект с нужным интерфейсом, мы будем использовать пользовательский шаблон \verb"Interface" и просто определим копию \verb"AnyPtr", но с другим конструктором и оператором другим оператором \verb"operator->".
+Тогда благодаря особому поведению оператор \verb"operator->" (которое обсуждалось в разделе~\ref{section::OperatorArrow} про декораторы) мы получим желаемое поведение.
+\begin{cppcode}
+template<class Data>
+class UserInterface : Data::template Interface<PtrBase<Data>> {
+private:
+  using Base = Data::template Interface<PtrBase<Data>>;
+  using Base0 = PtrBase<Data>;
+  using VPtr = typename Base::VPtr;
+  using TableType = typename Base::TableType;
+
+public:
+  UserInterface(VPtr ptr, const TableType* vtable) noexcept
+      : Base{Base0(ptr, vtable)} {
+  }
+  Base* operator->() noexcept {
+    return this;
+  }
+};
+\end{cppcode}
+Вот тут мы вынимаем нужные псевдонимы, а потом нам нужен вспомогательный конструктор для \verb"PtrBase", который принимает указатель на объект и указатель на виртуальную таблицу.
+Для этого надо будет добавить этот конструктор в защищенную часть класса \verb"PtrBase" и объявить \verb"UserInterface" другом.
+\begin{cppcode}
+template<class Data>
+class PtrBase {
+protected:
+  ...
+  template<class T, bool>
+  friend class ProxyPtr;
+
+  PtrBase(VPtr ptr, const TableType* vtable) noexcept
+      : ptr_(ptr), vtable_(vtable) {
+  }
+  ...
+public:
+  ...
+
+\end{cppcode}
+Так же обратите внимание на то, что класс \verb"UserInterface" имеет только неконстантную версию оператора \verb"operator->".
+\begin{cppcode}
+Base* operator->() noexcept {
+  return this;
+}
+\end{cppcode}
+Это корректно, так как мы всегда будем вызывать этот оператор у временного объекта построенного налету.
+Теперь изменим имплементацию \verb"AnyPtr" так
+\begin{cppcode}
+template<class Data>
+class AnyPtr : Data::template Interface<PtrBase<Data>> {
+private:
+  using Base = Data::template Interface<PtrBase<Data>>;
+  using UInterface = UserInterface<Data>;
+  
+public:
+
+  ...
+  UInterface operator->() const noexcept {
+    return UInterface(Base::ptr_, Base::vtable_);
+  }
+};
+\end{cppcode}
+
+\subsubsection{Как использовать и финальные замечания}
+
+\paragraph{Как использовать}
+
+Вот теперь точно все, и теперь можно использовать класс следующим образом.
+Пользователь пишет
+\begin{cppcode}
+struct FG {
+  template<class B>
+  struct Interface : B {
+    void f() const {
+      call<0>(this);
+    }
+    int g() {
+      return call<1>(this); Members<T>
+    }
+  };
+  template<class T>
+  using Members = AL::List<sig<void() const>(&T::f), sig<int()>(&T::g)>;
+};
+\end{cppcode}
+После чего пусть у нас есть классы
+\begin{cppcode}
+struct A {
+  void f() const {}
+  int g() { return 0; }
+};
+struct B {
+  void f() const {}
+  int g() { return 0; }
+};
+\end{cppcode}
+Теперь можно использовать их так:
+\begin{cppcode}
+A a;
+B b;
+AnyPtr<FG> ptr = &a;
+ptr->f(); // calls a.f()
+ptr->g() // calls a.g()
+ptr = &b;
+ptr1->f(); // calls b.f()
+ptr1->g(); // calls b.g()
+\end{cppcode}
+
+\paragraph{Замечания}
+
+Здесь я хочу сделать пару полезных замечаний по поводу имплементации выше.
+\begin{enumerate}
+\item В имплементации выше я совсем не затрагивал обработку ошибок.
+В любой шаблонной магии важно, чтобы пользователь получил осмысленное сообщение об ошибке, чтобы понимать, что он сделал не так.
+
+\item Один из источников ошибок -- необходимость имплементировать в \verb"Interface" методы с теми же именами и той же сигнатурой, как и в списке \verb"Members".
+По-хорошему надо добавить в имплементацию проверку на совпадение типов (или хотя бы на возможность конвертации одной сигнатуры в другую).
+
+\item Так же я опускал проверки с помощью \verb"assert" и \verb"static_assert", для предотвращения наших с вами ошибок, как разработчиков библиотеки.
+По хорошему эти все проверки должны быть в финальном коде.
+\end{enumerate}
