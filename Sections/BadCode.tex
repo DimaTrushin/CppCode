@@ -771,7 +771,7 @@ short function(int, double&, char);
 Для того, чтобы подсказать на стороне пользователя, что аргумент может меняться, обычно принято передавать аргумент по указателю.
 В этом случае картина выглядит так
 \begin{cppcode}
-short function(int, double&, char);
+short function(int, double*, char);
 
 int x = 1;
 double y = 2.;
@@ -798,7 +798,7 @@ short r = function(x, &y, z);
 \end{enumerate}
 В соответствии с этими соглашениями предыдущий пример выглядел бы так.
 \begin{cppcode}
-short function(int, char, double&);
+short function(int, char, double*);
 
 int x = 1;
 double y = 2.;
