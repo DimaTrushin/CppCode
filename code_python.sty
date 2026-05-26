@@ -34,13 +34,13 @@
 \newcounter{@pythoncode}
 \setcounter{@pythoncode}{1}
 \lstnewenvironment{pythoncode}[1][]
-  {\lstset{
+  {\expanded{\noexpand\lstset{
     language=Python,
     style=Python,
     #1
   }
-}
+}}
 {\setcounter{@pythoncode}{\value{lstnumber}}}
 
-\newcommand{\inputpythoncode}[2][]{\lstinputlisting[language=Python, style=Python,, #1]{#2}}
+\newcommand{\inputpythoncode}[2][]{\lstinputlisting[language=Python, style=Python, #1]{#2}}
 

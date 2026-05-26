@@ -1,0 +1,404 @@
+\ProvidesFile{ArgDispatcher.tex}[Автоматическая диспетчеризация аргументов]
+
+
+\subsection{Автоматическая диспетчеризация аргументов}
+\label{section::ArgDispatcher}
+
+\subsubsection{Что мы хотим}
+
+Предположим, что у нас есть заранее известный список переменных разного типа:
+\[
+\verb"T1 t1",\; \verb"T2 t2",\; \ldots,\; \verb"Tn tn"
+\]
+И у нас есть функция \verb"g", у которой аргументы имеют разный тип и эти типы лежат среди указанных выше.
+Например,
+\begin{cppcode}[\nonumbers]
+int g(T4 x, const T1& y, T2& z)
+\end{cppcode}
+И теперь мы хотим подставить переменные \verb"t1",\ldots,\verb"tn" в функцию \verb"g" автоматически.
+То есть хотим написать вызов вида:
+\begin{cppcode}[\nonumbers]
+int res = auto_call(g, t1, ..., tn);
+\end{cppcode}
+чтобы он был эквивалентен вызову
+\begin{cppcode}[\nonumbers]
+int res = g(t4, t1, t2);
+\end{cppcode}
+То есть мы хотим идентифицировать аргументы по их типам.
+Я думаю, что можно придумать другие более хитрые способы диспетчеризации, но для начала давайте разберемся с этим.
+При этом мы хотим сообщать об ошибках в следующих случаях:
+\begin{enumerate}
+\item Если список переменных \verb"t1",\ldots,\verb"tn" содержит переменные одинакового типа (возможно отличающиеся \verb"const/volatile").
+В этом случае мы не сможем определить какую переменную мы хотим подставлять только по ее типу.
+
+\item Если список аргументов \verb"g" содержит аргументы одинакового типа.
+Здесь мы не отличаем тип от ссылки на тип, так же не отличаем наличие модификаторов \verb"const/volatile".
+Например, функция
+\begin{cppcode}[\nonumbers]
+int g(int x, const int& y, int& z)
+\end{cppcode}
+для нас имеет три одинаковых типа в аргументах -- \verb"int".
+Технически мы можем считать, что все эти ситуации предполагают, что мы подставляем одну и ту же переменную во все три аргумента.
+И это даже не очень плохо.
+
+Так же можно было бы заставить пользователя явно каставать аргументы с помощью \verb"std::move", например так:
+\begin{cppcode}[\nonumbers]
+int x = 1;
+int g(1, static_cast<const int&>(x), x);
+\end{cppcode}
+Но вот тут поди догадайся \verb"x" биндится на аргумент типа \verb"int", \verb"const int&" или \verb"int&".
+Так что этот подход не годится в принципе.
+Потому я предпочитаю жесткое ограничение -- никаких повторений типов даже на уровне ссылок.
+
+\item Если тип аргумента \verb"g" не содержится среди типов \verb"T1",\ldots,\verb"Tn".
+В этом случае мы просто не можем выбрать среди \verb"t1",\ldots,\verb"tn" аргументы для \verb"g".
+Можно было бы рассматривать возможность неявной конвертации, но это может привести к неожиданным проблемам, когда компилятор не сможет выбрать нужный тип.
+\end{enumerate}
+
+Давайте сразу скажу про одну проблему, которая у нас возникает.
+В языке возможно перегружать функции.
+Например
+\begin{cppcode}[\nonumbers]
+int g(int, char, double);
+int g(int, float);
+\end{cppcode}
+То мы просто так не сможем вызвать
+\begin{cppcode}[\nonumbers]
+int res = auto_call(g, t1, ... tn);
+\end{cppcode}
+Потому что компилятор не знает, какую из функций мы имеем в виду.
+Но эта проблема решается с помощью выбора сигнатуры явно с помощью \verb"sig" шаблона разобранного в разделе~\ref{section::FunctionList}.%
+\footnote{Сама имплементация начинается в разделе ~\ref{section::Sig}.}
+\begin{cppcode}[\nonumbers]
+int res = auto_call(sig<int(int, float)>(g), t1, ... tn);        // call the second function
+int res = auto_call(sig<int(int, char, double)>(g), t1, ... tn); // call the first function
+\end{cppcode}
+
+\subsubsection{Определение сигнатуры}
+
+Прежде чем решать саму задачу, нам надо научиться решать вспомогательную задачу, которая является в некотором смысле обратной к той, которую мы решали в разделе~\ref{section::FunctionList}.
+Нам нужно для каждой функции определять ее сигнатуру.
+Кроме того, мы не обязательно можем вызывать функцию.
+первый аргумент в \verb"auto_call" может быть объектом с перегруженным оператором \verb"operator()".
+Потому мы должны определять сигнатуру либо этого оператора, либо сигнатуру функции.
+
+\paragraph{Сигнатура функции}
+
+Для определения сигнатуры функции сделаем следующий вспомогательный шаблон
+\begin{cppcode}
+namespace detail {
+template<class F>
+struct SigOfImpl {
+  static_assert(False<F>,
+                "The argument of SigOf MUST be a function with no overloads or "
+                "a callable object with a unique operator()!");
+};
+
+template<class R, class... Args>
+struct SigOfImpl<R(Args...)> {
+  using type = TL::List<R, Args...>;
+};
+
+template<class R, class... Args>
+struct SigOfImpl<R (*)(Args...)> {
+  using type = TL::List<R, Args...>;
+};
+} // namespace detail
+\end{cppcode}
+Обратите внимание, что мы не рассматриваем методы классов, потому что для них нужен будет еще один вспомогательный аргумент типа класса.
+В целом можно было бы рассматривать и вызов метода класса, но я не буду этого делать тут.
+
+\paragraph{Добавляем \texttt{callable objects}}
+
+Теперь добавим объекты, у которых есть оператор \verb"operator()".
+У нас будет одно жесткое ограничение -- этот оператор НЕ должен быть перегружен.
+Либо надо будет сделать аналог \verb"sig" для выбора конкретной перегрузки оператора \verb"operator()".
+Я этого делать не буду.
+Я добавлю вспомогательный аргумент, как флаг, что мы рассматриваем специальный случай объекта.
+\begin{cppcode}
+namespace detail {
+template<class F, class = void>
+struct SigOfImpl {
+  static_assert(False<F>,
+                "The argument of SigOf MUST be a function with no overloads or "
+                "a callable object with a unique operator()!");
+};
+
+template<class R, class... Args>
+struct SigOfImpl<R(Args...), void> {
+  using type = TL::List<R, Args...>;
+};
+
+template<class R, class... Args>
+struct SigOfImpl<R (*)(Args...), void> {
+  using type = TL::List<R, Args...>;
+};
+
+template<class T, class R, class... Args>
+struct SigOfImpl<R (T::*)(Args...), void> {
+  using type = TL::List<R, Args...>;
+};
+
+template<class T, class R, class... Args>
+struct SigOfImpl<R (T::*)(Args...) const, void> {
+  using type = TL::List<R, Args...>;
+};
+
+template<class F>
+struct SigOfImpl<F, ForgetV<&F::operator()>> {
+  using type = typename SigOfImpl<decltype(&F::operator())>::type;
+};
+} // namespace detail
+\end{cppcode}
+Обратите внимание, что во-первых, я добавил \verb"SigOfImpl" для случая методов класса.
+Это связано с тем, что я буду определять сигнатуру \verb"T::operator()", который не является глобальной функцией.
+А во-вторых, посмотрите, как написана специализация для оператора \verb"operator()".
+В последней специализации, мы явно обращаемся к нему по адресу и забываем что мы сделали с помощью шаблона \verb"ForgetV", который подставляет \verb"void" вместо себя.%
+\footnote{Как такие трюки работают и что такое \verb"ForgetV" я подробно рассказывал в разделе~\ref{section::LogicChecks}.}
+Такой трюк позволяет провалиться в этот случай при наличия единственной версии оператора \verb"operator()" в классе.
+А дальше я просто определяю его сигнатуру, игнорируя тип класса.
+
+\paragraph{Пользовательский интерфейс}
+
+Теперь можно было бы сигнатуру вычленить так:
+\begin{cppcode}[\nonumbers]
+template<class F>
+using SigOf = typename detail::SigOfImpl<F>::type;
+\end{cppcode}
+Однако, этот подход не сработает, если вы передадите ссылку на объект типа \verb"F" или если вы передадите константный объект.
+А потому нам надо почистить \verb"F" от ссылок и констант так:
+\begin{cppcode}
+namespace detail {
+...
+template<class F>
+using Clear = std::remove_cv_t<std::remove_reference_t<F>>;
+} // namespace detail
+
+template<class F>
+using SigOf = typename detail::SigOfImpl<detail::Clear<F>>::type;
+\end{cppcode}
+Так же для удобства можно сделать версию от объекта
+\begin{cppcode}[\nonumbers]
+template<auto f>
+using SigOfF = typename detail::SigOfImpl<decltype(f)>::type;
+\end{cppcode}
+И теперь можно добавить вспомогательные шаблоны для получения типа возвращаемого значения и списка типов аргументов.
+\begin{cppcode}[\nonumbers]
+template<class F>
+using ReturnOf = TL::Front<SigOf<F>>;
+
+template<auto f>
+using ReturnOfF = typename TL::Front_t<SigOfF<f>>::type;
+
+template<class F>
+using ArgsOf = TL::PopFront<SigOf<F>>;
+
+template<auto f>
+using ArgsOfF = TL::PopFront<SigOfF<f>>;
+\end{cppcode}
+Все, теперь мы можем определить список аргументов для любой функции так
+\begin{cppcode}
+int g(int, const int&, int&&);
+using ArgList = ArgsOfF<g>;
+// ArgList equals List<int, const int&, int&&>
+\end{cppcode}
+
+\subsubsection{Имплементация}
+
+Начнем имплементацию с общей канвы.
+Мы хотим что-то такое:
+\begin{cppcode}
+template<class F, class... Args>
+constexpr auto auto_call(F&& f, Args&&... args) {
+  using ArgList = ArgsOf<F>;
+  using List = TL::List<Args...>;
+  // map args... to ArgList positions according to their types
+  // call f(permute(args));
+}
+\end{cppcode}
+Для выполнения перестановки аргументов в нужном порядке, мы в начале найдем список индексов, чтобы понимать, под каким номером надо брать аргумент из списка \verb"args...".
+Прежде всего почистим оба списка от ссылок и \verb"const/volatile".
+Для этого заведем вспомогательный шаблон
+\begin{cppcode}[\nonumbers]
+namespace detail {
+template<class List>
+using RemoveRefCV =
+    TL::Map<std::remove_cv_t, TL::Map<std::remove_reference_t, List>>;
+} // namespace detail
+\end{cppcode}
+Теперь почистим списки аргументов:
+\begin{cppcode}[\nonumbers]
+using ArgList = ArgsOf<F>;
+using List = TL::List<Args...>;
+using CleanArgList = detail::RemoveRefCV<ArgList>;
+using CleanList = detail::RemoveRefCV<List>;
+\end{cppcode}
+Теперь для каждого типа из \verb"CleanArgList" найдем его позицию в \verb"CleanList".
+Для этого определим вспомогательный шаблон:
+\begin{cppcode}
+namespace detail {
+template<class List>
+struct Bind {
+  template<class T>
+  struct IndexOf : TL::IndexOfFirst_t<List, T> {};
+};
+} // namespace detail
+\end{cppcode}
+Здесь \verb"Bind" нужен для запоминания \verb"CleanList" как контекста.
+Так же обратите внимание, что \verb"IndexOf" является классом, содержащем индекс как \verb"value" поле, а не числом.
+Теперь поиск индексов делается так:
+\begin{cppcode}
+using IndList = TL::Map<detail::Bind<CleanList>::template IndexOf, CleanArgList>;
+using EIndList = EL::FromTList<IndList, EL::List, int>;
+\end{cppcode}
+Здесь во второй строке мы конвертируем индекс к списку вида
+\begin{cppcode}
+template<class T, T... Es>
+struct List{};
+// for example EIndList equals List<int, 4, 1, 5>
+\end{cppcode}
+Теперь нужно вызвать вспомогательную функцию, которая примет \verb"EIndList" как дополнительный аргумент и добавить проверки на ошибки.
+Начнем с проверок на ошибки
+\begin{cppcode}
+static_assert(TL::Size<CleanList> == TL::Size<TL::NoDuplicates<CleanList>>,
+              "The arguments of auto_call MUST be of different type!");
+static_assert(TL::Size<CleanArgList> == TL::Size<TL::NoDuplicates<CleanArgList>>,
+              "The arguments of the first argument of auto_call MUST be of "
+              "different type!");
+static_assert(!EL::Contains<EIndList, -1>,
+              "The types of the arguments of the first argument of auto_call "
+              "MUST be among the types of the arguments of auto_call!");
+\end{cppcode}
+Можно было бы добавить вспомогательную функцию \verb"hasDuplicates" и проверять условие 
+\[
+\verb"!hasDuplicates<CleanList>"\text{ или }\verb"!hasDuplicates<CleanArgList>"
+\]
+но я не заморачивался.
+Так же обратите внимание, что отсутствие элемента означает, что индекс равен \verb"-1".
+Именно это значение я использую как флаг для проверки в третьем условии.
+И последняя строчка будет выглядеть так:
+\begin{cppcode}[\nonumbers]
+return detail::Call_impl<EIndList>::exec(
+    std::forward<F>(f), std::forward_as_tuple(std::forward<Args>(args)...));
+\end{cppcode}
+Здесь структура \verb"Call_impl" нужна для перехвата контекста, которым будет являться список индексов.
+А аргументы я передаю в виде \verb"std::tuple" из ссылок на исходные аргументы.
+При этом сохраняется вид ссылки lvalue или rvalue.
+\verb"exec" является статической функцией внутри \verb"Call_impl" уже для выполнения нужной работы.
+Вот как выглядит имплементация вспомогательного класса:
+\begin{cppcode}
+namespace detail {
+template<class TList>
+struct Call_impl {
+  /*error messages*/
+};
+
+template<template<class U, U...> class TList, int... Es>
+struct Call_impl<TList<int, Es...>> {
+  template<class F, class T>
+  static auto exec(F&& f, T&& data) {
+    return std::forward<F>(f)(std::get<Es>(std::forward<T>(data))...);
+  }
+};
+} // namespace detail
+\end{cppcode}
+В данном случае \verb"data" является элементом \verb"std::tuple" наполненная ссылками.
+С помощью \verb"std::get<Es>" мы выбираем из этого \verb"std::tuple" элементы с нужными индексами и распаковываем argument pack с помощью многоточия.
+Ни и всю эту радость подставляем в функцию \verb"f" (или в оператор \verb"operator()" для объекта \verb"f").
+
+\paragraph{Пример использования}
+
+Теперь я могу сделать так:
+\begin{cppcode}[\nonumbers]
+void f(int&& x, char y) {
+  std::cout << "f(" << x << ", " << y << ");\n";
+}
+
+int x = 1;
+auto_call(f, std::move(x), 'c', 1.2); // Args: int, char, double
+auto_call(f, 1, 'c', 1.2);            // Args: int, char, double
+\end{cppcode}
+Программа выведет на печать
+\begin{cppcode}[\nonumbers]
+f(1, 'c');
+f(1, 'c');
+\end{cppcode}
+Если же я сделаю так:
+\begin{cppcode}[\nonumbers]
+void g(int& x, int y) {
+  std::cout << "g(" << x << ", " << y << ");\n";
+}
+int x = 1;
+auto_call(g, x, 'c', 1.2);
+\end{cppcode}
+То будет ошибка компиляции, потому что у \verb"g" два аргумента одинакового типа.
+Если же попробую сделать так
+\begin{cppcode}[\nonumbers]
+void h(float x, double y) {
+  std::cout << "h(" << x << ", " << y << ");\n";
+}
+int x = 1;
+auto_call(h, x, 'c', 1.2);
+\end{cppcode}
+То будет ошибка компиляции, потому что среди аргументов нет типа \verb"float", а потому вместо \verb"float" нечего подставить.
+
+\subsubsection{Имплементация для метода класса}
+
+Здесь мы хотим несколько локализовать данные, а именно, мы хотим связать переменные \verb"t1",\ldots,\verb"tn" и функцию \verb"auto_call" вместе.
+Для этого можно спрятать переменные внутри вспомогательного класса контекста, а функцию \verb"auto_call" сделать его методов для доступа к контексту.
+Так можно использовать разные контексты в одном и том же месте кода.
+Мы хотим что-то вроде
+\begin{cppcode}
+void f(const int& x, char y) {
+  std::cout << "f(" << x << ", " << y << ");\n";
+}
+
+Dispatcher d(1, 'c', 1.2); // check that arguments are of different type
+d.call(f);
+\end{cppcode}
+Тогда можно сделать следующий класс:
+\begin{cppcode}
+template<class... Ts>
+struct Dispatcher {
+  using List = TL::List<Ts...>;
+  using CleanList = detail::RemoveRefCV<List>;
+  static_assert(TL::Size<CleanList> == TL::Size<TL::NoDuplicates<CleanList>>,
+                "The data in Dispatcher MUST be of different type!");
+
+  Dispatcher(Ts&&... args) : data(std::make_tuple(std::move(args)...)) {
+  }
+
+  template<class F>
+  auto call(F&& f) {
+    using ArgList = ArgsOf<F>;
+    using CleanArgList = detail::RemoveRefCV<ArgList>;
+    using IndList =
+        TL::Map<detail::Bind<CleanList>::template IndexOf, CleanArgList>;
+    using EIndList = EL::FromTList<IndList, EL::List, int>;
+    static_assert(TL::Size<CleanArgList> ==
+                      TL::Size<TL::NoDuplicates<CleanArgList>>,
+                  "The arguments of the argument of call MUST be of "
+                  "different type!");
+    static_assert(
+        !EL::Contains<EIndList, -1>,
+        "The types of the arguments of the argument of call "
+        "MUST be among the types of the values stored in Dispatcher!");
+    return detail::Call_impl<EIndList>::exec(std::forward<F>(f), data);
+  }
+
+  std::tuple<Ts...> data;
+};
+\end{cppcode}
+По сути класс хранит три поля:
+\begin{enumerate}
+\item Конструктор.
+Он в частности позволяет не использовать явно имена типов в конструкторе.
+Обратите внимание, что тут не универсальные ссылки, а rvalue ссылки.
+То есть конструктор поглощает внутрь себя все данные.
+
+\item Поле с данными \verb"data".
+Оно специально открытое, чтобы можно было с ними манипулировать напрямую.
+
+\item Метод \verb"call", в который подставляется функция или callable object.
+Диспетчеризация выполняется внутри этого метода, где по сути мы сводим задачу к использованию уже имплементированного \verb"Call_impl" класса.
+\end{enumerate}

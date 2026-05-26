@@ -37,12 +37,12 @@
 \newcounter{@cppcode}
 \setcounter{@cppcode}{1}
 \lstnewenvironment{cppcode}[1][]
-  {\lstset{
+  {\expanded{\noexpand\lstset{
     language=C++,
     style=Cpp,
     #1
   }
-}
+}}
 {\setcounter{@cppcode}{\value{lstnumber}}}
 
 \newcommand{\inputcppcode}[2][]{\lstinputlisting[language=C++, style=Cpp, #1]{#2}}
