@@ -1,0 +1,343 @@
+\ProvidesFile{CascadeCall.tex}[Каскадный вызов]
+
+
+\subsection{Каскадный вызов функций}
+
+\subsubsection{Что мы хотим}
+
+Если до или во время прочтения описания задачи вас преследуют мысли <<а нахрена оно мне надо?>>, то для самых любопытных сразу скажу, что нам придется решать эти задачи для автоматизации построения State Machine, которая будет обсуждаться в разделе~\ref{section::StateMachine}.
+
+\paragraph{Описание задачи}
+
+Предположим, что у нас есть некоторый фиксированный набор типов: \verb"A", \verb"B", \verb"C", \verb"D".
+И есть функции, принимающие аргументы указанных типов (возможно по ссылкам) и возвращающие \verb"bool".
+\begin{cppcode}[\nonumbers]
+bool f0(A, B, C&, D);
+bool f1(A, B, C, D);
+bool f2(A&, B, const C&, D&);
+\end{cppcode}
+Теперь мы хотим вызвать эти функции на наборе переменных
+\begin{cppcode}[\nonumbers]
+A a; B b; C c; D d;
+\end{cppcode}
+следующим образом:
+\begin{enumerate}
+\item В начале вызываем
+\begin{cppcode}[\nonumbers]
+bool f0(a, b, c, d);
+\end{cppcode}
+Если она возвращает \verb"true", то останавливаемся и возвращаем \verb"0".
+Иначе идем дальше.
+
+\item Теперь вызываем
+\begin{cppcode}[\nonumbers]
+bool f1(a, b, c, d);
+\end{cppcode}
+Если она возвращает \verb"true", то останавливаемся и возвращаем \verb"1".
+Иначе идем дальше.
+
+\item Теперь вызываем
+\begin{cppcode}[\nonumbers]
+bool f2(a, b, c, d);
+\end{cppcode}
+Если она возвращает \verb"true", то останавливаемся и возвращаем \verb"2".
+Иначе возвращаем \verb"-1".
+\end{enumerate}
+То есть мы хотим вызывать функции друг за другом на одном и том же наборе переменных до тех пор, пока функция не вернет \verb"true".
+Если вернула, то мы останавливаемся и возвращаем номер функции, на которой остановились.
+А если ни одна функция не вернула \verb"true", то возвращаем \verb"-1" как флаг того, что ничего не было найдено.
+
+\paragraph{Какой хотим синтаксис}
+
+В примере выше, мы бы хотели иметь возможность написать следующий код:
+\begin{cppcode}[\nonumbers]
+A a; B b; C c; D d;
+using FList = AL::List<f0, f1, f2>;
+int res = cascade_call<FList>(a, b, c, d);
+\end{cppcode}
+То есть мы складываем все функции в список элементов разного типа.
+И потом вызываем функцию \verb"cascade_call", которая проходится по списку функций и каждую вызывает от своего набора аргументов.
+
+\subsubsection{Идея имплементации \texttt{cascad\_call}}
+
+\paragraph{Идея рекурсивного решения}
+
+Понятно, как можно написать решение в рекурсивной форме.
+Для этого нужно представить себе наш код как:
+\begin{cppcode}
+if (f0(a, b, c, d))
+  return 0;
+if (f1(a, b, c, d))
+  return 1;
+if (f2(a, b, c, d))
+  return 2;
+return -1;
+\end{cppcode}
+Тогда можно посмотреть на голову списка и вызывать ее. Если получили \verb"true", то возвращаем текущий индекс.
+А если получили \verb"false", то увеличиваем текущий индекс на \verb"1", выкидываем голову списка и переходим к следующей функции.
+В случае пустого списка выкинуть \verb"-1".
+Я не буду писать это решение в коде%
+\footnote{Если хотите, можете взять себе это как упражнение}
+так как мне хочется иметь не рекурсивную версию.
+
+\paragraph{Идея не рекурсивного решения}
+
+Давайте вспомним, что в C++ логические операторы для \verb"bool" обладают ленивым вычислением.
+Например выражение
+\begin{cppcode}[\nonumbers]
+f0(a, b, c, d) || f1(a, b, c, d) || f2(a, b, c, d);
+\end{cppcode}
+вычисляется слева направо до первого момента, как будет получено \verb"true".
+После чего дальнейшие аргументы не вычисляются.
+Это позволяет выполнить функции одну за другой и остановиться вовремя.
+Минус в том, что нельзя так быстро понять, а на каком индексе мы остановились.
+Для решения этой проблемы, мы заведем переменную \verb"ind" для индекса с изначальным значением \verb"-1", завернем наши функции во wrapper-ы которые будут принимать \verb"ind" по ссылке.
+И каждая функция будет писать в \verb"ind" свой номер, если результат вычисления \verb"true".
+А вычислить логическое <<или>> на всех функциях можно с помощью fold-expression доступных с C++17.
+Давайте напишу условный код (так оно не сработает, конечно):
+\begin{cppcode}[\nonumbers]
+template<class... Funs, class... Args>
+bool call_left_to_right(Funs... fs, Args&&... args) {
+  return (... || fs(std::forward<Args>(args)...)); 
+}
+\end{cppcode}
+
+\subsubsection{Имплементация \texttt{cascad\_call}}
+
+Давайте я начну с кода самой функции.
+Так как пока у меня нет рабочего решения, то идея заключается в том, чтобы внутри вызвать вспомогательный класс.
+Причина почему класс, а не функция в том, что классы проще специализировать для проверки на ошибки.
+\begin{cppcode}
+namespace detail {
+  ...
+} // namespace detail
+
+template<class FList, class... Args>
+constexpr int cascade_call(Args&&... args) {
+  return detail::CascadeImpl<FList>::call(std::forward<Args>(args)...);
+}
+\end{cppcode}
+И вспомогательный шаблонный класс мы поместим во вспомогательное пространство имен, чтобы не засорять пространство имен.
+Имплементация вспомогательного класса будет как обычно в два шага:
+\begin{enumerate}
+\item Общая версия с дефолтным параметром, которая отлавливает ошибки.
+
+\item И специализированная версия, которая выполняет работу.
+\end{enumerate}
+Вот так выглядит общая версия:
+\begin{cppcode}
+template<class FList, bool isCorrect = AL::isList<FList>>
+struct CascadeImpl {
+  static_assert(
+      AL::isList<FList>,
+      "The template argument of cascade_call MUST be an element list of "
+      "functions returning bool!");
+};
+\end{cppcode}
+Тут я проверяю только, что \verb"FList" -- это список элементов вида \verb"List<u, v, w>", но не проверяю можно ли позвать \verb"u", \verb"v", \verb"w" с нужными аргументами.
+Можно накручивать дополнительные проверки, как вам вздумается.
+Тем более, что мы точно знаем как выглядят аргументы функций (с точностью до наличия ссылок или \verb"const" калификаторов).
+Я этого делать здесь не буду.
+Теперь общая имплементация выглядит так:
+\begin{cppcode}
+template<class FList>
+struct CascadeImpl<FList, true> {
+  template<class... Args>
+  constexpr static int call(Args&&... args) {
+    return CascadeUnpack<AL::Enum<FList>>::exec(std::forward<Args>(args)...);
+  }
+};
+\end{cppcode}
+Давайте поясню, что тут происходит.
+\begin{enumerate}
+\item Прежде чем позвать каждую функцию, мне надо знать ее номер.
+Для этого я  список функций превращаю в список функций с индексами.
+Для этого использую метод \verb"Enum", который обсуждался в разделе~\ref{section::TypeListOps}.%
+\footnote{Формально мы обсуждали ее для списка типов, но ясно, как ее организовать для списка элементов.}
+Работает он так: если нам был дан список элементов
+\begin{cppcode}[\nonumbers]
+FList = AL::List<f0, f2, f2>;
+\end{cppcode}
+то после применения операции \verb"Enum", мы получим список типов:
+\begin{cppcode}
+TL::List<Pair<0, f0>, Pair<1, f1>, Pair<2, f2>>;
+\end{cppcode}
+
+\item Теперь когда у нас есть пары нам бы хотелось подставить воспользоваться pack-ами внутри \verb"FList".
+Но в функции \verb"call" мы не видим его содержимое.
+Чтоб увидеть содержимое, надо воспользоваться вспомогательным шаблоном, где содержимое можно просмотреть по явной специализации.
+Именно для этого мы передаем вызов следующему шаблону, а точнее вызываем у него метод \verb"exec" и в него форвардим аргументы с помощью perfect forwarding (см.~\ref{section::InitClass} пункт~\ref{section::InitClass::PerfForward}).
+\end{enumerate}
+Теперь вспомогательный шаблон
+\begin{cppcode}
+
+template<class FList>
+struct CascadeUnpack {
+  static_assert(Logic::False<FList>, "Internal error of cascade_call!");
+};
+
+template<template<class...> class TList, auto... fs, int... inds>
+struct CascadeUnpack<TList<EL::Pair<inds, fs>...>> {
+  template<class... Args>
+  constexpr static int exec(Args&&... args) {
+    int counter = -1;
+    (void)(... || WF<fs, inds>::exec(counter, std::forward<Args>(args)...));
+    return counter;
+  }
+};
+\end{cppcode}
+Давайте поясню что происходит.
+\begin{enumerate}
+\item Общий шаблон принимает что угодно, кроме \verb"Enum" (потому что вторая специализация принимает в точности \verb"Enum").
+А значит в ней я сообщаю об ошибках.
+Причем это ошибка именно \verb"cascade_call", потому что я не хочу, чтобы пользователь этой функции видел имена вспомогательных классов.
+
+\item В специализации \verb"args" -- это переданные аргументы.
+Мы заводим счетчик \verb"counter" с дефолтным значением \verb"-1".
+И потом уже происходит магия вызова функций через fold-expression.
+
+\item Обратите внимание, что внутри fold-expression мы вызываем не исходные функции \verb"fs", а специальный wrapper
+\begin{cppcode}
+WF<fs, inds>::exec( ... )
+\end{cppcode}
+Тут \verb"WF<fs, inds>" -- это шаблонный тип, а \verb"exec" -- статическая функция внутри него.
+Эта функция принимает все аргументы \verb"args" и дополнительно \verb"counter" по ссылке и внутри пишет значение из \verb"inds", если \verb"fs" вернула \verb"true".
+Обратите внимание, что функции и индексы передаются через шаблонные параметры.
+И нам придется обсудить еще один wrapper.
+
+\item Само fold-expression выглядит так:
+\begin{cppcode}[\nonumbers]
+(... || WF<fs, inds>::exec(counter, std::forward<Args>(args)...));
+\end{cppcode}
+Что грубо говоря превращается в:
+\begin{cppcode}[\nonumbers]
+(WF<f0, 0>::exec(counter, std::forward<Args>(args)...) ||
+ WF<f1, 1>::exec(counter, std::forward<Args>(args)...) ||
+ WF<f2, 2>::exec(counter, std::forward<Args>(args)...));
+\end{cppcode}
+Обратите внимание, что это выражение возвращает значение типа \verb"bool", но мы его не используем.
+И чтобы подавить предупреждения компилятора, я использую \verb"(void)" перед возвращаемым значением.
+
+\item Ну и после вычисления fold-expression возвращаем сохраненное значение \verb"counter".
+\end{enumerate}
+Ну и теперь последний рывок -- внутренний wrapper.
+\begin{cppcode}
+template<auto f, int ind>
+struct FW {
+  template<class... Args>
+  constexpr static bool exec(int& counter, Args&&... args) {
+    if (f(std::forward<Args>(args)...)) {
+      counter = ind;
+      return true;
+    }
+    return false;
+  }
+};
+\end{cppcode}
+Тут вроде без сюрпризов, мы запускаем функцию \verb"f" на ее наборе аргументов внутри \verb"if".
+Если получили \verb"true", то прежде чем выйти из функции, мы записываем в \verb"counter" текущее значение индекса \verb"ind" и уже потом выходим.
+А если \verb"false", то так \verb"false" и возвращаем и не паримся.
+
+\subsubsection{Добавляем диспетчеризацию}
+
+\paragraph{Что хотим}
+
+Теперь давайте усложним задачу.
+Пусть у нас есть список переменных заданных заранее как и прежде:
+\begin{cppcode}[\nonumbers]
+A a; B b; C c; D d;
+\end{cppcode}
+Но теперь каждая из функций принимает не обязательно все эти переменные в качестве аргументов.
+И при этом не обязательно в том же порядке.
+Но гарантируется, что \verb"A", \verb"B", \verb"C", \verb"D" -- разные типы и каждая функция принимает каждую переменную не более одного раза.
+Правда функция может принимать переменную не только по значению, но и по ссылке и константной ссылке, но НЕ rvalue ссылке (это тоже можно было бы обойти, но я не хочу заморачиваться).
+\begin{cppcode}[\nonumbers]
+bool f0(A, const C&);
+bool f1(C, B);
+bool f2(A&, D, const C&);
+\end{cppcode}
+И мы хотим использовать тот же самый синтаксис что и выше:
+\begin{cppcode}[\nonumbers]
+using FList = AL::List<f0, f1, f2>;
+int res = cascade_auto_call<FList>(a, b, c, d);
+\end{cppcode}
+И последняя строчка вызовет функции слева направо, подставляя аргументы куда надо.
+Для имплементации такой версии нам надо добавить автоматическую диспетчеризацию для аргументов.
+Ее мы как раз обсуждали в разделе~\ref{section::ArgDispatcher}.
+
+\paragraph{Имплементация}
+
+Если посмотреть внимательно, то мы увидим, что единственное, чем отличаются две функции по каскадному вызову -- это версией wrapper-а.
+Давайте я покажу, как будет выглядеть этот wrapper для автоматической диспетчиризации.
+\begin{cppcode}
+template<auto f, int ind>
+struct FWAuto {
+  template<class... Args>
+  constexpr static bool exec(int& counter, Args&&... args) {
+    if (auto_call(f, std::forward<Args>(args)...)) {
+      counter = ind;
+      return true;
+    }
+    return false;
+  }
+};
+\end{cppcode}
+То есть теперь нам надо обернуть вызов функции внутрь \verb"auto_call", чтоб она расставила аргументы как нам надо.
+А чтобы переиспользовать код, давайте просто сделаем wrapper еще одним параметром для двух вспомогательных классов.
+А именно
+\begin{cppcode}
+template<class FList, template<auto, int> class WF>
+struct CascadeUnpack {
+  static_assert(Logic::False<FList>, "Internal error of cascade_call!");
+};
+
+template<template<class...> class TList, auto... fs, int... inds,
+         template<auto, int> class WF>
+struct CascadeUnpack<TList<EL::Pair<inds, fs>...>, WF> {
+  template<class... Args>
+  constexpr static int exec(Args&&... args) {
+    int counter = -1;
+    (void)(... || WF<fs, inds>::exec(counter, std::forward<Args>(args)...));
+    return counter;
+  }
+};
+\end{cppcode}
+Тут мы принимаем \verb"WF" как шаблонный параметр, а не используем конкретный шаблон.
+Чтобы мы могли передать сюда в распаковку этот шаблон, про него должен быть в курсе и \verb"CascadeCall" класс.
+В него мы тоже добавим этот параметр
+\begin{cppcode}
+template<class FList, template<auto, int> class WF,
+         bool isCorrect = AL::isList<FList>>
+struct CascadeImpl {
+  static_assert(
+      AL::isList<FList>,
+      "The template argument of cascade_call MUST be an element list of "
+      "functions returning bool!");
+};
+
+template<class FList, template<auto, int> class WF>
+struct CascadeImpl<FList, WF, true> {
+  template<class... Args>
+  constexpr static int call(Args&&... args) {
+    return CascadeUnpack<AL::Enum<FList>, WF>::exec(
+        std::forward<Args>(args)...);
+  }
+};
+\end{cppcode}
+И мы просто передаем его внутрь.
+А теперь уже наши две версии каскадного вызова будут выглядеть так:
+\begin{cppcode}
+template<class FList, class... Args>
+constexpr int cascade_call(Args&&... args) {
+  return detail::CascadeImpl<FList, detail::FWrap>::call(
+      std::forward<Args>(args)...);
+}
+
+template<class FList, class... Args>
+constexpr int cascade_auto_call(Args&&... args) {
+  return detail::CascadeImpl<FList, detail::FWrapAuto>::call(
+      std::forward<Args>(args)...);
+}
+\end{cppcode}
+Вот и все.
+Теперь можно последовательно вызывать функции друг за другом до нужного момента и не заботиться о том, где какие аргументы стоят.
