@@ -1,0 +1,469 @@
+\ProvidesFile{Tuple.tex}[Tuple]
+
+
+\subsection{\texttt{Tuple}}
+\label{section::Tuple}
+
+\subsubsection{Зачем?}
+
+Учитывая, что STL вполне себе содержит тип \verb"std::tuple", надо бы объяснить а зачем мне нужно писать свой.
+Главная для меня проблема заключается в том, что  \verb"std::tuple" невозможно использовать в \verb"constexpr" контексте, а именно, я не могу сделать следующее:
+\begin{cppcode}[\nonumbers]
+template<class T, T x>
+struct Value {};
+
+using Data = Value<std::tuple<int, double, float>, std::make_tuple<int, double, float>(1)>;
+\end{cppcode}
+Причина в том, что в \verb"std::tuple" есть приватные данные, а элементы таких классов нельзя использовать в качестве параметров шаблона.
+Другая проблема в том, что \verb"std::tuple" имеет обращение к элементу за \verb"O(n)", что так себе.
+А потому цель этого раздела в том, чтобы имплементировать \verb"constexpr" версию \verb"Tuple", которую я буду использовать для имплементации State Machine позже.%
+\footnote{С появлением оператора \texttt{operator[]} для аргумент pack-а в C++26 многое из того, что здесь сказано можно сделать чуть проще.}
+
+\subsubsection{Имплементация}
+
+Основная идея заключается в том, чтобы не определять \verb"Tuple" индуктивно, вместо этого под каждый тип заведем отдельный класс \verb"Node<ind, T>" и унаследуемся от этих нодов, где \verb"ind" -- целочисленный индекс номера элемента в \verb"Tuple".
+Наличие индекса различает элементы даже при одинаковом \verb"T", что не накладывает дополнительных ограничений на типы.
+Кроме того, это позволит получать доступ к элементу с помощью \verb"static_cast" трюка за \verb"O(1)".
+Начнем с описания \verb"Node":
+\begin{cppcode}
+namespace detail {
+template<int ind, class T>
+struct Node {
+  using value_type = int;
+  static constexpr value_type value = ind;
+  using type = T;
+  type data;
+};
+} // namespace detail
+\end{cppcode}
+В саму структуру зашьем индекс и тип, а так же хранимый элемент \verb"data".
+Теперь определим приватную имплементацию для \verb"Tuple" следующим образом:
+\begin{cppcode}
+template<class List, class... Ts>
+struct TupleImpl {
+  static_assert(Logic::False<List>, "Internal error of Tuple!");
+};
+
+template<template<class U, U...> class List, int... inds, class... Ts>
+struct TupleImpl<List<int, inds...>, Ts...> : Node<inds, Ts>... {
+  /*ctors*/
+};
+\end{cppcode}
+Имплементация зависит от списка \verb"List", который содержит последовательность целых чисел вида \verb"EL::List<int, 0, 1,..., n-1>" и набора типов \verb"Ts...".
+При этом предполагается, что \verb"n" совпадает с количеством элементов в \verb"Ts...".
+Для нас основным будет специализация, где список типов раскрывается, а общее определение используется для сообщения о внутренней ошибке имплементации (первая общая версия не должна никогда вызываться).
+
+Я пока пропустил код для двух конструкторов, которые мне понадобятся, чтобы они не мешали.
+Чуть позже я их добавлю.
+А теперь давайте я возьму пример со списком из трех типов:
+\begin{cppcode}[\nonumbers]
+struct Tuple<List<int, 0, 1, 2>, int, bool, char> : Node<0, int>, Node<1, bool>, Node<2, char> {
+  /*ctors*/
+};
+\end{cppcode}
+Так как в коде используются структуры с публичными полями, то достучаться до конкретного \verb"Node" можно с помощью \verb"static_cast" вот как:
+\begin{cppcode}[\nonumbers]
+using CTuple = Tuple<List<int, 0, 1, 2>, int, bool, char>;
+
+CTuple t{1, true, 'c'};
+int = static_cast<Node<0, int>&>(t).data;
+bool = static_cast<Node<1, bool>&>(t).data;
+char = static_cast<Node<2, int>&>(t).data;
+\end{cppcode}
+Я чуть позже упрощу этот код с помощью функции \verb"Get", а пока пусть это будет лишь демонстрация устройства самого типа.
+Теперь добавим конструкторы:
+\begin{cppcode}
+template<template<class U, U...> class List, int... inds, class... Ts>
+struct TupleImpl<List<int, inds...>, Ts...> : Node<inds, Ts>... {
+  constexpr TupleImpl() = default;
+  
+  template<class... Args, class = std::enable_if_t<(sizeof...(Args) == sizeof...(Ts))>>
+  constexpr TupleImpl(Args&&... args)
+      : Node<inds, Ts>{std::forward<Ts>(args)}... {
+  }
+};
+\end{cppcode}
+Дефолтный конструктор просто по умолчанию и обязательно \verb"constexpr".
+А во втором конструкторе обратите внимание на то, что мы используем шаблонный конструктор
+\begin{cppcode}
+template<class... Args, class = std::enable_if_t<(sizeof...(Args) == sizeof...(Ts))>>
+constexpr TupleImpl(Args&&... args)
+\end{cppcode}
+Так приходится делать, если мы хотим поддержать perfect forwarding (см.~\ref{section::InitClass} пункт~\ref{section::InitClass::PerfForward}).
+Если бы мы написали 
+\begin{cppcode}
+template<class List, class... Ts>
+struct TupleImpl {
+  static_assert(Logic::False<List>, "Internal error of Tuple!");
+};
+
+template<template<class U, U...> class List, int... inds, class... Ts>
+struct TupleImpl<List<int, inds...>, Ts...> : Node<inds, Ts>... {
+  constexpr TupleImpl(Ts&&... args)
+      : Node<inds, Ts>{std::forward<Ts>(args)}... {
+  }
+};
+\end{cppcode}
+То аргументы уже были бы rvalue ссылками, так как теперь внутри \verb"TupleImpl" типы \verb"Ts..." известные, а не шаблонные параметры.
+А мы хотим передавать не только rvalue ссылки, например такой конструктор нельзя забиндить на переменные, потому что они lvalue.
+По хорошему надо все возможные сочетания \verb"&&" и \verb"&" по всем аргументам.
+Но это как раз делается с помощью perfect forwarding.
+А для этого типы аргументов должны быть шаблонными параметрами.
+И мы делаем только одну простую проверку, что количество типов такое же, что и количество аргументов.
+А дальше уже попытка присвоить аргумент из \verb"args" к полю \verb"data" внутри \verb"Node", которое происходит тут
+\begin{cppcode}[\nonumbers]
+Node<inds, Ts>{std::forward<Ts>(args)}...
+\end{cppcode}
+вызовет ошибку, при невозможности присвоить.
+Теперь можно определить сам шаблон \verb"Tuple" так:
+\begin{cppcode}
+template<class... Ts>
+struct Tuple : detail::TupleImpl<EL::MakeList<int, 0, sizeof...(Ts)>, Ts...> {
+  using Base = detail::TupleImpl<EL::MakeList<int, 0, sizeof...(Ts)>, Ts...>;
+  using Base::Base;
+  
+  static constexpr int size = sizeof...(Ts);
+};
+\end{cppcode}
+Здесь мы просто наследуемся публично от \verb"TupleImpl" и передаем ему сгенерированную последовательность из целых индексов для всех элементов в \verb"Ts..." (см.~\ref{section::EListImpl}) и список типов \verb"Ts...".
+Так же мы наследуем все конструкторы в $4$ строчке.
+И вводим удобную константу \verb"size" для получения размера \verb"Tuple" .
+
+\subsubsection{Проверки и доступ}
+
+\paragraph{\texttt{isTuple}}
+
+Если мы хотим работать с новым типом, то для начала надо научиться проверять он ли нам дан:
+\begin{cppcode}
+namespace detail {
+template<class T>
+struct isTupleImpl : Bool_t<false> {};
+
+template<class... Ts>
+struct isTupleImpl<Tuple<Ts...>> : Bool_t<true> {};
+} // namespace detail
+
+template<class T>
+struct isTuple_t : detail::isTupleImpl<std::remove_cv_t<T>> {};
+
+template<class T>
+constexpr bool isTuple = isTuple_t<T>::value;
+\end{cppcode}
+
+\paragraph{\texttt{Get}}
+
+Для получения доступа к элементу по индексу хорошо бы сделать красивый метод обертку.
+В начале определим функцию без каких-либо проверок:
+\begin{cppcode}
+namespace detail {
+template<int ind, class T>
+constexpr T& Get_Impl(detail::Node<ind, T>& t) noexcept {
+  return t.data;
+}
+
+template<int ind, class T>
+constexpr const T& Get_Impl(const detail::Node<ind, T>& t) noexcept {
+  return t.data;
+}
+
+template<int ind, class T>
+constexpr T&& Get_Impl(detail::Node<ind, T>&& t) noexcept {
+  return std::move(t).data;
+}
+
+template<int ind, class T>
+constexpr const T&& Get_Impl(const detail::Node<ind, T>&& t) noexcept {
+  return std::move(t).data;
+}
+} // namespace detail
+\end{cppcode}
+Возникает вопрос, какая у них должна быть сигнатура.
+И правильный ответ надо смотреть у метода \verb"std::get", который определяет ровно эти $4$ сигнатуры.
+Теперь можно определить более безопасные версии с проверками:
+\begin{cppcode}
+template<int ind, class... Ts>
+constexpr auto& Get(Tuple<Ts...>& t) noexcept {
+  static_assert(0 <= ind, "The index of Get MUST be non-negative!");
+  static_assert(ind < Tuple<Ts...>::size, "The index of Get MUST be in range of the Tuple!");
+  return detail::Get_Impl<ind>(t);
+}
+
+template<int ind, class... Ts>
+constexpr const auto& Get(const Tuple<Ts...>& t) noexcept {
+  static_assert(0 <= ind, "The index of Get MUST be non-negative!");
+  static_assert(ind < Tuple<Ts...>::size, "The index of Get MUST be in range of the Tuple!");
+  return detail::Get_Impl<ind>(t);
+}
+
+template<int ind, class... Ts>
+constexpr auto&& Get(Tuple<Ts...>&& t) noexcept {
+  static_assert(0 <= ind, "The index of Get MUST be non-negative!");
+  static_assert(ind < Tuple<Ts...>::size, "The index of Get MUST be in range of the Tuple!");
+  return detail::Get_Impl<ind>(std::move(t));
+}
+
+template<int ind, class... Ts>
+constexpr const auto&& Get(const Tuple<Ts...>&& t) noexcept {
+  static_assert(0 <= ind, "The index of Get MUST be non-negative!");
+  static_assert(ind < Tuple<Ts...>::size, "The index of Get MUST be in range of the Tuple!");
+  return detail::Get_Impl<ind>(std::move(t));
+}
+\end{cppcode}
+Аналогично можно сделать доступ по имени типа.
+Я приведу пример только для не константной rvalue ссылки, чтобы не писать груду одинакового кода.
+\begin{cppcode}
+namespace detail {
+template<class T, int ind>
+constexpr T&& Get_Impl(Node<ind, T>&& t) noexcept {
+  return std::move(t).data;
+}
+} // namespace detail
+
+template<class T, class... Ts>
+constexpr T&& Get(Tuple<Ts...>&& t) noexcept {
+  static_assert(TL::Contains<TL::List<Ts...>, T>, "The type T MUST be in the tuple!");
+  return detail::Get_Impl<T>(std::move(t));
+}
+\end{cppcode}
+Теперь можно получать доступ к элементам и по индексу и по имени типа:
+\begin{cppcode}
+using Data = Tuple<int, bool, char>;
+Data t{2, true, 'c'};
+
+int  x = Get<0>(t);
+bool y = Get<1>(t);
+char z = Get<2>(t);
+
+int  u = Get<int>(t);
+bool v = Get<bool>(t);
+char w = Get<char>(t);
+\end{cppcode}
+
+\paragraph{\texttt{TypeAt}}
+
+Теперь сделаем доступ к типу элемента по индексу.
+Как обычно снаружи сделаем удобный интерфейс для пользования:
+\begin{cppcode}
+template<class T, int ind>
+struct TypeAt_t : detail::TypeAtImpl<T, ind> {};
+
+template<class T, int ind>
+using TypeAt = typename TypeAt_t<T, ind>::type;
+\end{cppcode}
+И всю содержательную работу спрячем в \verb"TypeAtImpl".
+Я как обычно в имплементации ввожу дополнительный флаг и использую общий шаблон с ложным флагом для сообщении об ошибках и специализацию для \verb"true" флага уже как рабочую имплементацию.
+\begin{cppcode}
+template<class T, int ind, bool isCorrect = TypeAtCheck<T, ind>>
+struct TypeAtImpl {
+  static_assert(isTuple<T>, "The first argument of TypeAt MUST be a Tuple!");
+  static_assert(ind >= 0, "The second argument of TypeAt MUST be non-negative!");
+  static_assert(Imply_u<isTuple_t<T>, isLess_w<Int_t<ind>, TL::Size_t<T>>>,
+               "The second argument of TypeAt MUST be less than the amount of types in Tuple!");
+  using type = void;
+};
+\end{cppcode}
+Функции проверки выглядят так
+\begin{cppcode}
+template<class T, int ind>
+struct TypeAtCheck_t {
+  using IsTuple = isTuple_t<T>;
+  using IsNonNegative = Bool_t<ind >= 0>;
+  using IsBounded = isLess_w<Int_t<ind>, TL::Size_t<T>>;
+  using value_type = bool;
+  static constexpr value_type value = And_u<IsTuple, IsNonNegative, IsBounded>;
+};
+
+template<class T, int ind>
+constexpr bool TypeAtCheck = TypeAtCheck_t<T, ind>::value;
+\end{cppcode}
+Здесь я пользуюсь ленивым вычислением \verb"And" шаблонов.
+Если первое условие не верное, то второе и третье уже не проверяются.
+А потому если мы проверили, что шаблон является \verb"Tuple", то вычисление его размера с помощью \verb"TL::Size" не упадет (либо можно было воспользоваться полем \verb"size", но тогда его бы пришлось заворачивать во вспомогательный шаблон в силу особенностей компиляции шаблонного кода).
+И теперь код для собственно имплементации.
+В начале будет вспомогательная функция и потом уже сама имплементация.
+Я опять воспользуюсь тем, что функции могут восстанавливать пропущенные шаблонные аргументы:
+\begin{cppcode}
+template<int ind, class T>
+consteval T Type_At_Impl(detail::Node<ind, T> t) noexcept {
+  return t.data;
+}
+
+template<class T, int ind>
+struct TypeAtImpl<T, ind, true> {
+  using type = decltype(Type_At_Impl<ind>(std::declval<T>()));
+};
+\end{cppcode}
+То есть вспомогательная функция мне возвращает объект типа \verb"T, который лежит в \verb"Tuple", а потом я уже с помощью \verb"decltype" перевожу элемент в тип.
+Тут воспользоваться \verb"Get" нельзя, так как он возвращает ссылки, а нам нужен в точности тот тип, который лежит внутри.
+
+\subsubsection{Forward и ForwardAsTuple}
+
+Если уж мы начали имплементировать свой \verb"Tuple" и переходить на него с \verb"std::tuple", то мы никуда не денемся без имплементации своей версии \verb"ForwardAsTuple", а значит нужно и обычную версию \verb"Forward" написать.
+Обычная \verb"Forward" пишется так:
+\begin{cppcode}
+template<class T>
+constexpr T&& Forward(std::remove_reference_t<T>& t) noexcept {
+  return static_cast<T&&>(t);
+}
+
+template<class T>
+constexpr T&& Forward(std::remove_reference_t<T>&& t) noexcept {
+  return static_cast<T&&>(t);
+}
+\end{cppcode}
+А \verb"ForwardAsTuple" тогда имплементируется следующим образом:
+\begin{cppcode}
+template<class... Args>
+auto ForwardAsTuple(Args&&... args) {
+  using T = Tuple<Args&&...>;
+  return T(Forward<Args>(args)...);
+}
+\end{cppcode}
+
+\subsubsection{Apply}
+
+Работая над списками типов и элементов в compile-time, мы научились применять различные операции к элементам списков с помощью \verb"Map" конструкции.
+Здесь же у нас \verb"Tuple" хранит информацию в виде нестатических членов, а потому конструкция \verb"Map" не сработает.
+А потому надо определить ее аналог.
+Я не знаю зачем я ее назвал \verb"Apply", ну пусть так и будет.
+Теперь как выглядит сама задача.
+Пусть у нас есть некоторый шаблонный класс вида:
+\begin{cppcode}
+template<auto x>
+struct F {
+  using value_type = /*some type*/;
+  static constexpr value_type value = /*some formula*/;
+};
+\end{cppcode}
+Тогда \verb"F<x>::value" представляет из себя результат применения \verb"F" к элементу \verb"x".
+Пусть теперь нам дан \verb"Tuple" из каких-то элементов и наша задача построить новый \verb"Tuple" применив \verb"F" к каждому элементу исходного \verb"Tuple".
+Имплементацию делаем по стандартной схеме.
+Публичная часть выглядит так:
+\begin{cppcode}
+template<template<auto> class F, auto t>
+using Apply_t = typename detail::ApplyImpl<F, std::remove_cv_t<decltype(t)>, t>::type;
+
+template<template<auto> class F, auto t>
+constexpr auto Apply = detail::ApplyImpl<F, std::remove_cv_t<decltype(t)>, t>::value;
+\end{cppcode}
+Здесь должно броситься в глаза, что я передаю вместе с элементом \verb"t" сразу и его тип и убираю с него \verb"const/volatile" спецификаторы.
+Еще я определил нестандартным для себя образом \verb"Apply_t", и потому \verb"constexpr" переменная \verb"Apply" не получается из \verb"Apply_t" распаковкой.
+Просто мне нужна версия, которая действует и на типах и на элементах.
+Я когда-нибудь причешу этот код.
+Как и раньше я использую общую версию шаблона для сообщения об ошибках: 
+\begin{cppcode}
+template<template<auto> class F, class T, auto t>
+struct ApplyImpl {
+  static_assert(TL::isList<T>, "The second element of Apply MUST be of Tuple-like type!");
+};
+\end{cppcode}
+При этом я не использую никакую проверку в дополнительном флаге.
+Я просто распакую \verb"Tuple".
+Причина в том, что у меня нет нормальной проверки, что мне дали тип похожий на \verb"Tuple".
+Ее можно написать, но я решил сократить.
+\begin{cppcode}
+template<template<auto> class F, class... Ts, template<class...> class Tuple, Tuple<Ts...> t>
+struct ApplyImpl<F, Tuple<Ts...>, t> {
+  using Indices = EL::MakeList<int, 0, TL::Size<Tuple<Ts...>>>;
+  static constexpr auto value = ApplyByIndices<F, Indices, Tuple, t>;
+  using value_type = std::remove_cv_t<decltype(value)>;
+  using type = value_type;
+};
+\end{cppcode}
+Внутри имплементации я создаю последовательность индексов для всех элементов \verb"Indices" и передаю вычисление другому шаблону \verb"ApplyByIndices", который должен будет ее распаковать.
+Его имплементация выглядит так:
+\begin{cppcode}
+template<template<auto> class F, class Ind, template<class...> class Tuple, auto t>
+struct ApplyByIndicesImpl {
+  static_assert(EL::isList<Ind>, "Internal error of Apply!");
+};
+
+template<template<auto> class F, template<class...> class Tuple, auto t, int... es>
+struct ApplyByIndicesImpl<F, EL::List<int, es...>, Tuple, t> {
+  static constexpr auto value =
+      Tuple<decltype(F<Get<es>(t)>::value)...>(F<Get<es>(t)>::value...);
+  using value_type = std::remove_cv_t<decltype(value)>;
+};
+
+template<template<auto> class F, class Ind, template<class...> class Tuple, auto t>
+constexpr auto ApplyByIndices = ApplyByIndicesImpl<F, Ind, Tuple, t>::value;
+\end{cppcode}
+Как обычно первая общая версия использована для проверки самого себя от внутренних ошибок.
+Последний шаблон -- это сведение к вспомогательному.
+А внутри имплементации я просто получаю доступ к элементу с помощью функции \verb"Get" и подставляю результат в \verb"F".
+Так же мне надо явно вычислить тип этого элемента, что делается в \verb"decltype".
+При этом в \verb"value_type" я добавляю \verb"std::remove_cv_t", потому что у \verb"value" тип будет обязательно с модификатором \verb"const", а мне он тут не нужен.
+
+\subsubsection{Filter}
+
+Так же мне понадобится вспомогательный метод для отбора элементов \verb"Tuple" по предикату.
+Давайте напишу его имплементацию.
+Публичная часть
+\begin{cppcode}
+template<template<auto> class F, auto t>
+using Filter_t = typename detail::FilterImpl<F, std::remove_cv_t<decltype(t)>, t>::type;
+
+template<template<auto> class F, auto t>
+constexpr auto Filter = detail::FilterImpl<F, std::remove_cv_t<decltype(t)>, t>::value;
+\end{cppcode}
+Теперь имплементация, где я просто распаковываю \verb"Tuple".
+\begin{cppcode}
+template<template<auto> class F, class T, auto t>
+struct FilterImpl {
+  static_assert(TL::isList<T>, "The second element of Filter MUST be of Tuple-like type!");
+};
+
+template<template<auto> class F, class... Ts, template<class...> class Tuple, Tuple<Ts...> t>
+struct FilterImpl<F, Tuple<Ts...>, t> {
+  using Indices = EL::MakeList<int, 0, TL::Size<Tuple<Ts...>>>;
+  static constexpr auto value = FilterByIndices<F, Indices, Tuple, t>;
+  using value_type = std::remove_cv_t<decltype(value)>;
+  using type = value_type;
+};
+\end{cppcode}
+Внутри как и в случае \verb"Apply" я завожу индексы элементов и потом вызываю вспомогательный шаблон \verb"FilterByIndices", который распаковывает эту последовательность.
+Вспомогательный шаблон выглядит так:
+\begin{cppcode}
+template<template<auto> class F, class Ind, template<class...> class Tuple, auto t>
+struct FilterByIndicesImpl {
+  static_assert(EL::isList<Ind>, "Internal error of Filter!");
+};
+
+template<template<auto> class F, template<class...> class Tuple, auto t, int... es>
+struct FilterByIndicesImpl<F, EL::List<int, es...>, Tuple, t> {
+  using DIList = EL::List<int, (F<Get<es>(t)>::value ? es : -1)...>;
+  using IList = EL::EraseAll<DIList, -1>;
+  using FT = ApplyByIndicesImpl<Identity, IList, Tuple, t>;
+  static constexpr auto value = FT::value;
+  using value_type = FT::value_type;
+};
+\end{cppcode}
+где
+\begin{cppcode}
+struct Identity {
+  using value_type = decltype(x);
+  static constexpr value_type value = x;
+};
+\end{cppcode}
+Давайте прокомментирую имплементацию \verb"FilterByIndicesImpl".
+\begin{enumerate}
+\item В первой строке я вычисляю значение предиката для всех индексов и запоминаю индекс если предикат \verb"true" и флаг \verb"-1", если \verb"false".
+\begin{cppcode}[\nonumbers]
+using DIList = EL::List<int, (F<Get<es>(t)>::value ? es : -1)...>;
+\end{cppcode}
+
+\item После чего я удаляю все \verb"-1"
+\begin{cppcode}[\nonumbers]
+using IList = EL::EraseAll<DIList, -1>;
+\end{cppcode}
+что оставляет только те индексы, для которых предикат верен.
+
+\item Теперь надо отобрать элементы по индексам.
+Но это можно сделать так: применим \verb"ApplyByIndicesImpl" используя тождественное отображение.
+Потому что эта функция отбирала все элементы по указанным индексам и применяла функцию к каждому.
+\begin{cppcode}[\nonumbers]
+using FT = ApplyByIndicesImpl<Identity, IList, Tuple, t>;
+\end{cppcode}
+
+\item А дальше идет стандартное определение \verb"value" и \verb"value_type".
+\end{enumerate}

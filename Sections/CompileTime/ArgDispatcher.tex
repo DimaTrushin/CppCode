@@ -277,6 +277,8 @@ static_assert(!EL::Contains<EIndList, -1>,
 Так же обратите внимание, что отсутствие элемента означает, что индекс равен \verb"-1".
 Именно это значение я использую как флаг для проверки в третьем условии.
 И последняя строчка будет выглядеть так:
+% TO DO
+% switch to constexpr Tuple
 \begin{cppcode}[\nonumbers]
 return detail::Call_impl<EIndList>::exec(
     std::forward<F>(f), std::forward_as_tuple(std::forward<Args>(args)...));
