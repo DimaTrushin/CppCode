@@ -157,23 +157,23 @@ constexpr bool isTuple = isTuple_t<T>::value;
 \begin{cppcode}
 namespace detail {
 template<int ind, class T>
-constexpr T& Get_Impl(detail::Node<ind, T>& t) noexcept {
+constexpr T& Get_Impl(Node<ind, T>& t) noexcept {
   return t.data;
 }
 
 template<int ind, class T>
-constexpr const T& Get_Impl(const detail::Node<ind, T>& t) noexcept {
+constexpr const T& Get_Impl(const Node<ind, T>& t) noexcept {
   return t.data;
 }
 
 template<int ind, class T>
-constexpr T&& Get_Impl(detail::Node<ind, T>&& t) noexcept {
-  return std::move(t).data;
+constexpr T&& Get_Impl(Node<ind, T>&& t) noexcept {
+  return std::forward<T>(t.data);
 }
 
 template<int ind, class T>
-constexpr const T&& Get_Impl(const detail::Node<ind, T>&& t) noexcept {
-  return std::move(t).data;
+constexpr const T&& Get_Impl(const Node<ind, T>&& t) noexcept {
+  return std::forward<const T>(t.data);
 }
 } // namespace detail
 \end{cppcode}
@@ -215,7 +215,7 @@ constexpr const auto&& Get(const Tuple<Ts...>&& t) noexcept {
 namespace detail {
 template<class T, int ind>
 constexpr T&& Get_Impl(Node<ind, T>&& t) noexcept {
-  return std::move(t).data;
+  return std::forward<T>(t.data);
 }
 } // namespace detail
 
