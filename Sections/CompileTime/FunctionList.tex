@@ -423,3 +423,116 @@ using signature = R(Arg1*, Args...);
 using const_signature = R(Arg1*, Args...) const;
 \end{cppcode}
 Потому что в этом случае пользователь нам указал в точности нужный тип первого аргумента и константность может быть только в неявном аргументе, который определяется шаблонным параметром \verb"T".
+
+\subsubsection{Вычленение сигнатуры функции}
+\label{section::ArgsOf}
+
+Нам еще пригодится возможность определить у функции возвращаемое значение и список типов для принимаемых аргументов.
+Прежде всего надо решить эту проблему для одной функции.
+Здесь я буду рассматривать не только функции, но и функторы (то есть объекты с оператором \verb"operator()").
+С объектами с перегруженным оператором скобки есть одна тонкость, код ниже будет работать только если есть в точности один такой оператор без перегруженных версий.
+Как обычно начнем со вспомогательного шаблона имплементации.
+Общая версия шаблона нужна для сигнализации об ошибках.
+\begin{cppcode}
+namespace detail {
+template<class F, class = void>
+struct SigOfImpl {
+  static_assert(
+      False<F>,
+      "The argument of SigOf MUST be a function with no overloads, or "
+      "a function with specified signature via sig template, or "
+      "a callable object with a unique operator()!");
+};
+\end{cppcode}
+Теперь надо пройтись по всем возможным сигнатурам функций, которые только бывают:
+\begin{cppcode}
+template<class R, class... Args>
+struct SigOfImpl<R(Args...), void> {
+  using type = TL::List<R, Args...>;
+};
+
+template<class R, class... Args>
+struct SigOfImpl<R(Args...) noexcept, void> {
+  using type = TL::List<R, Args...>;
+};
+
+template<class R, class... Args>
+struct SigOfImpl<R (*)(Args...), void> {
+  using type = TL::List<R, Args...>;
+};
+
+template<class R, class... Args>
+struct SigOfImpl<R (*)(Args...) noexcept, void> {
+  using type = TL::List<R, Args...>;
+};
+\end{cppcode}
+Теперь добавим в списки аргументов произвольный метод класса, это нам понадобится для того, чтобы определить сигнатуру у оператора \verb"operator()":%
+\footnote{По хорошему надо еще добавить на каждую из этих версий \texttt{volatile} версию, но я решил так не заморачиваться.}
+\begin{cppcode}
+template<class T, class R, class... Args>
+struct SigOfImpl<R (T::*)(Args...), void> {
+  using type = TL::List<R, Args...>;
+};
+
+template<class T, class R, class... Args>
+struct SigOfImpl<R (T::*)(Args...) noexcept, void> {
+  using type = TL::List<R, Args...>;
+};
+
+template<class T, class R, class... Args>
+struct SigOfImpl<R (T::*)(Args...) const, void> {
+  using type = TL::List<R, Args...>;
+};
+
+template<class T, class R, class... Args>
+struct SigOfImpl<R (T::*)(Args...) const noexcept, void> {
+  using type = TL::List<R, Args...>;
+};
+\end{cppcode}
+И теперь можно разобраться с оператором \verb"operator()".
+Делаем это стандартным методом через попытку обратиться к оператору по его адресу в шаблонном параметре.
+Если адрес \verb"F::operator()" находится однозначно, то эта специализация сработает, если же такого оператора нет или есть несколько таких операторов (включая шаблонные), то эта специализация не сработает.
+\begin{cppcode}
+template<class F>
+struct SigOfImpl<F, ForgetV<&F::operator()>> {
+  using type = typename SigOfImpl<decltype(&F::operator())>::type;
+};
+} // namespace detail
+\end{cppcode}
+Теперь определим пользовательские методы:
+\begin{cppcode}
+template<class F>
+struct SigOf_t : detail::SigOfImpl<std::remove_cvref_t<F>> {};
+
+template<class F>
+using SigOf = typename SigOf_t<F>::type;
+\end{cppcode}
+Я специально чищу тип от ссылки и \verb"const/volatile" квалификаторов.
+Чтобы не пришлось делать больше случаев внутри имплементации.
+Теперь 
+\begin{cppcode}
+int f(double&, char*);
+struct A {
+  bool operator()(int) const;
+};
+
+using List1 = SigOf<decltype(f)>;
+// List1 = TL::List<int, double&, char*>
+using List2 = SigOf<A>;
+// List2 = TL::List<bool, int>
+\end{cppcode}
+Тогда для получения возвращаемого значения надо взять первый элемент этого списка, а для получения аргументов дропнуть первый:
+\begin{cppcode}
+template<class F>
+struct ReturnOf_t : TL::Front_t<SigOf<F>> {};
+
+template<class F>
+using ReturnOf = typename ReturnOf_t<F>::type;
+
+template<class F>
+struct ArgsOf_t : TL::PopFront_t<SigOf<F>> {};
+
+template<class F>
+using ArgsOf = typename ArgsOf_t<F>::type;
+\end{cppcode}
+Вот и все.
