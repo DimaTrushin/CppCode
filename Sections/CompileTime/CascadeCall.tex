@@ -58,7 +58,7 @@ int res = cascade_call<FList>(a, b, c, d);
 То есть мы складываем все функции в список элементов разного типа.
 И потом вызываем функцию \verb"cascade_call", которая проходится по списку функций и каждую вызывает от своего набора аргументов.
 
-\subsubsection{Идея имплементации \texttt{cascad\_call}}
+\subsubsection{Идея имплементации \texttt{cascade\_call}}
 
 \paragraph{Идея рекурсивного решения}
 
@@ -102,7 +102,7 @@ bool call_left_to_right(Funs... fs, Args&&... args) {
 }
 \end{cppcode}
 
-\subsubsection{Имплементация \texttt{cascad\_call}}
+\subsubsection{Имплементация \texttt{cascade\_call}}
 
 Давайте я начну с кода самой функции.
 Так как пока у меня нет рабочего решения, то идея заключается в том, чтобы внутри вызвать вспомогательный класс.
