@@ -2543,6 +2543,273 @@ if (a.has_connection())
 Но в последней строчке мы обращаемся по адресу памяти объекта \verb"A", как будто там лежит объект типа \verb"unsafe_instance<A>".
 Но его там нет, а это UB.
 
+\subsubsection{Доступ к приватным данным}
+
+Что если вы хотите сделать \verb"unsafe" версию с приватными данными и методами?
+Давайте покажу метод, который позволяет получить доступ к любым данным внутри класса без UB.
+Все держится на следующей идее.
+Если у вас есть шаблонный класс, и вы его хотите явно инстанциировать, то в его шаблонных аргументах отключена проверка уровней доступа.
+
+\paragraph{Описание эффекта и мотивировка зачем так сделали}
+
+Пусть у вас есть следующие классы:
+\begin{cppcode}
+class A {
+  /* is hard to compile */
+};
+
+class B {
+public:
+  ...
+private:
+  template<class T>
+  void function() {}
+};
+\end{cppcode}
+Мы считаем, что класс \verb"A" очень долго обрабатывается компилятором, потому что там внутри куча шаблонной магии.
+И так же предположим, что внутри класса \verb"B", часто используется \verb"function<A>".
+В каждой единице трансляции вы будете заново компилировать эту версию функции.
+Вместо того, чтобы это делать, можно было бы в одной единице трансляции сделать явную инстанциацию этого шаблона, а во всех остальных сделать ее \verb"extern", чтобы компилятор ее не генерировал зазря.
+\begin{cppcode}
+// B.h
+struct B { /* implementation */ };
+extern template B::function<A>;
+
+// B.cpp
+template B::function<A>;
+\end{cppcode}
+Таким образом мы везде где подключен \verb"B.h" не будем генерировать функцию \verb"function<A>", а в \verb"B.cpp" она будет сгенерирована явно.
+Обратите внимание, что при таком подходе приходится обращаться к приватной функции внутри класса \verb"B".
+Это мотивировка почему в таком случае отключена проверка уровней доступа.
+
+\paragraph{Как этим воспользоваться}
+
+Предположим, что у нас теперь есть класс с приватными данными и методами:
+\begin{cppcode}
+class A {
+  void f() const {}
+  int x;
+};
+\end{cppcode}
+И мы хотим получить доступ к этим полям.
+Посмотрим на следующий класс:
+\begin{cppcode}
+template<class Tag, typename Tag::type M>
+struct Extract {
+  friend constexpr typename Tag::type member(Tag) {
+    return M;
+  }
+};
+\end{cppcode}
+Теперь делаем специальный служебный класс выполняющий роль \verb"Tag" в шаблоне выше:
+\begin{cppcode}
+struct A_x {
+  using type = int A::*;
+  constexpr friend type member(A_x);
+};
+\end{cppcode}
+И теперь сделаем явную инстанциацию класса \verb"Extract":
+\begin{cppcode}[\nonumbers]
+template struct Extract<A_x, &A::x>;
+\end{cppcode}	
+Давайте я скажу, что сейчас произошло.
+\begin{enumerate}
+\item Последняя строчка явно создает одну конкретную версию класса по шаблону \verb"Extract":
+\begin{cppcode}[\nonumbers]
+struct Extract<A_x, &A::x> {
+  friend constexpr typename int A::* member(A_x) {
+    return &A::x;
+  }
+};
+\end{cppcode}
+
+\item Данный класс определяет глобальную функцию \verb"member" своим другом и тут же дает ей определение.
+Таким образом эта функция на самом деле помещается снаружи от этого класса, как будто вы написали:
+\begin{cppcode}[\nonumbers]
+struct Extract<A_x, &A::x> {
+  friend constexpr typename int A::* member(A_x);
+};
+
+constexpr typename int A::* member(A_x) {
+  return &A::x;
+}
+\end{cppcode}
+
+\item Теперь посмотрим на наш \verb"Tab" класс:
+\begin{cppcode}[\nonumbers]
+struct A_x {
+  using type = int A::*;
+  constexpr friend type member(A_x);
+};
+\end{cppcode}
+Здесь используется псевдоним \verb"type" для того, чтобы передать внутрь \verb"Extract" нужную информацию о типе поля.
+И мы так же объявляем (но не определяем) глобальную функцию \verb"member", что равносильно коду
+\begin{cppcode}[\nonumbers]
+struct A_x {
+  using type = int A::*;
+  constexpr friend type member(A_x);
+};
+
+constexpr int A::* member(A_x);
+\end{cppcode}
+
+\item Обратите внимание на то, что оба класса объявляют одну и ту же глобальную функцию.
+Зачем же нужно второе определение?
+Оказывается, если мы инстанциируем шаблонный класс как выше:
+\begin{cppcode}[\nonumbers]
+template struct Extract<A_x, &A::x>;
+\end{cppcode}
+То мы действительно создадим глобальную функцию \verb"member", однако, компилятор ее не увидит.
+Чтобы компилятор ее увидел, нам нужно сделать forward declaration.
+Однако, forward declaration в этом случае сделать не получится, потому что \verb"member" является не шаблонной функцией, а снаружи от \verb"Extract" мы попросту не знаем тип аргумента и возвращаемого значения.
+Однако, если мы возьмем не шаблонный класс \verb"A_x" то его объявление 
+\begin{cppcode}[\nonumbers]
+struct A_x {
+  using type = int A::*;
+  constexpr friend type member(A_x);
+};
+\end{cppcode}
+делает функцию \verb"member" видимой компилятору.%
+\footnote{Формально оно становится видимо для ADL поиска по имени класса \text{A\_x}.}
+Таким образом роль этого класса не только быть тегом для \verb"member", но и сделать эту функцию видимой.
+\end{enumerate}
+Теперь можно считать, что у нас есть следующие классы
+\begin{cppcode}
+class A {
+  void f() const {}
+  int x = 0;
+};
+
+struct A_x {
+  using type = int A::*;
+  constexpr friend type member(A_x);
+};
+
+struct Extract<A_x, &A::x> {
+  friend constexpr typename int A::* member(A_x);
+};
+
+constexpr typename int A::* member(A_x) {
+  return &A::x;
+}
+\end{cppcode}
+А значит, мы можем написать следующее:
+\begin{cppcode}
+constexpr auto x = member(A_x{});
+A a;
+std::cout << "a.x = " << a.*x << '\n';
+constexpr A ca;
+static_assert(ca.*x == 0, "Extracted!");
+\end{cppcode}
+Заметьте, что данное решение работает даже в внутри \verb"constexpr" контекста.
+Если же вы хотите справиться с функцией, то делается все то же самое.
+В начале заводим класс \verb"Tag":
+\begin{cppcode}
+struct A_f {
+  using type = void(A::*)() const;
+  constexpr friend type member(A_f);
+};
+\end{cppcode}
+И теперь объявляем \verb"member" с помощью явной инстанциации шаблона \verb"Extract":
+\begin{cppcode}
+template struct Extract<A_f, &A::f>;
+\end{cppcode}
+Все, теперь можно пользоваться:
+\begin{cppcode}
+constexpr auto f = member(A_f{});
+A a;
+(a.*f)();
+\end{cppcode}
+Тут только надо не забыть скобки вокруг \verb"a.*f" потому что у оператора \verb".*" приоритет ниже, чем у оператора скобки \verb"operator()".
+Это один из основных источников проблем с этим оператором.
+
+\paragraph{Как это автоматизировать?}
+
+Тут можно чуть-чуть себе помочь облегчить написание класса тега.
+Заведем два вспомогательных класса внутри служебного пространства имен:
+\begin{cppcode}
+namespace detail {
+template<class TTag, typename TTag::type TM>
+struct Extract {
+  friend constexpr typename TTag::type member(TTag) {
+    return TM;
+  }
+};
+
+template<class TTag, class MType>
+struct Tag {
+  using type = MType;
+  constexpr friend type member(TTag);
+};
+} // namespace detail
+\end{cppcode}
+Теперь можно составить класс \verb"A_x" следующим образом:
+\begin{cppcode}
+struct A_x : detail::Tag<A_x, int A::*> {};
+\end{cppcode}
+Но если вы захотите явно инстанциировать класс \verb"Extract", то вы обязаны это сделать в том же пространстве имен \verb"detail", то есть придется писать так:
+\begin{cppcode}
+template struct Extract<A_x, &A::x>;
+\end{cppcode}
+И теперь использование точно такое же
+\begin{cppcode}
+constexpr auto x = member(A_x{});
+A a;
+std::cout << "a.x = " << a.*x << '\n';
+constexpr A ca;
+static_assert(ca.*x == 0, "Extracted!");
+\end{cppcode}
+То есть инстанциацию \verb"Extract" нельзя будет выполнить внутри служебного класса \verb"unsafe" как мы делали раньше.
+И у вас будет служебное пространство имен, где находится \verb"Extract" и все его явные инстанциации.
+Теперь если вы хотите сделать версию \verb"unsafe", то можно сделать следующее:
+\begin{cppcode}
+class A {
+  void f() const {}
+  int x;
+};
+
+namespace detail {
+struct A_x : detail::Tag<A_x, int A::*> {};
+struct A_f : detail::Tag<A_x, void(A::*)() const> {};
+} // namespace detail
+
+template<class T>
+class Unsafe;
+
+template<>
+class Unsafe<A> {
+  static constexpr auto px = member(A_x{});
+  static constexpr auto pf = member(A_f{});
+
+public:
+  explicit Unsafe(A& obj) : obj_(&obj) {
+  }
+  void f() const {
+    (obj_->*pf)();
+  }
+  int& x() const {
+    return obj_->*px;
+  }
+
+private:
+  A* obj_;
+};
+
+template<class T>
+Unsafe<T> unsafe(T& x) {
+  return Unsafe<T>(x);
+}
+\end{cppcode}
+И теперь можно спокойно писать:
+\begin{cppcode}
+A a;
+unsafe(a).f();
+unsafe(a).x() = 2;
+\end{cppcode}
+Получается неинтрузивное решение, которое позволяет залезть внутрь любому стороннему классу.
+Опять же, у вас должны быть очень веские причины, вмешиваться в приватную деятельность класса.
+Но если вы понимаете, что вы делаете и можете гарантировать, что не сломаете инварианты класса, то полезно понимать, как такое вообще делать.
+
 \subsubsection{Обработка некорректных данных}
 
 Главная задача конструктора -- построить объект в корректном состоянии.
