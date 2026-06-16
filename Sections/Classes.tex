@@ -2770,7 +2770,10 @@ class A {
 
 namespace detail {
 struct A_x : detail::Tag<A_x, int A::*> {};
-struct A_f : detail::Tag<A_x, void(A::*)() const> {};
+struct A_f : detail::Tag<A_f, void(A::*)() const> {};
+
+template struct Extract<A_x, &A::x>;
+template struct Extract<A_f, &A::f>;
 } // namespace detail
 
 template<class T>
@@ -2778,6 +2781,8 @@ class Unsafe;
 
 template<>
 class Unsafe<A> {
+  using A_x = detail::A_x;
+  using A_f = detail::A_f;
   static constexpr auto px = member(A_x{});
   static constexpr auto pf = member(A_f{});
 
