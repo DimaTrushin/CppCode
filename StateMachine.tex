@@ -1,0 +1,4231 @@
+\documentclass{article}
+
+\usepackage{packages}
+\usepackage{environments}
+\usepackage{commands}
+\usepackage{xfp} 
+\usepackage{fp}
+
+\title{Написание кода на C++}
+\author{Дима Трушин}
+\date{2024 --- 2025}
+
+\AtBeginDocument{\shorthandoff{"}}
+
+
+\begin{document}
+
+\maketitle
+\tableofcontents
+\newpage
+{
+\section{State Machine или Машина Состояний (Конечный автомат)}
+\colorlet{InitialStateColor}{Red!40}
+\colorlet{FinalStateColor}{Blue!40}
+\colorlet{EventColor}{Green!40}
+\colorlet{IdleColor}{BlueGreen!40}
+
+\subsection{Что это такое}
+
+\subsubsection{Почти определение}
+
+Машина состояний -- это граф с дополнительной информацией, который должен отражать текущее состояние системы и сценарии изменения этих состояний.
+Чтобы в точности понять, что это такое давайте начнем с картинки:
+\[
+\xymatrix{
+  *+=+[o][F-][F*:InitialStateColor]{\texttt{st}_\texttt{0}}\ar[r]&
+  *+=+[o][F-]{\texttt{st}_\texttt{1}}\ar@/^10pt/[r]\ar[d]&
+  *+=+[o][F-]{\texttt{st}_\texttt{2}}\ar@/^10pt/[l]\ar[d]&
+  {}&
+  *+=+[o][F-][F*:EventColor]{\texttt{e}_\texttt{0}}\ar@{}[d]|{\vdots}\\
+  {}&
+  *+=+[o][F-]{\texttt{st}_\texttt{3}}\ar[r]&
+  *+=+[o][F-][F*:FinalStateColor]{\texttt{st}_\texttt{4}}&
+  {}&
+  *+=+[o][F-][F*:EventColor]{\texttt{e}_\texttt{k}}\\
+}
+\]
+Давайте прокомментирую, что тут происходит:
+\begin{enumerate}
+\item У State Machine обязательно есть множество состояний.
+На картинке выше -- это вершины графа.
+В нашем случае это $\verb"st"_{\verb"0"}$, $\verb"st"_{\verb"1"}$,$\verb"st"_{\verb"2"}$, $\verb"st"_{\verb"3"}$ и $\verb"st"_{\verb"4"}$.
+
+\item Среди состояний всегда должно быть в точности одно выделенное состояние, называемое Initial (начальное).
+На картинке выше оно выделено $\begin{array}{|c|}\hline{\cellcolor{InitialStateColor}}\\\hline\end{array}$.
+
+\item Среди состояний может быть выделено любое (возможно пустое) множество Final (финальных) вершин.
+Их еще могут называть терминальными.
+На картинке выше отмечена одна терминальная вершина  $\begin{array}{|c|}\hline{\cellcolor{FinalStateColor}}\\\hline\end{array}$.
+
+\item Для каждой State Machine обязательно выделено некоторое множество событий (объекты из каких-то множеств), на которые State Machine может реагировать.
+На картинке выше они выделены $\begin{array}{|c|}\hline{\cellcolor{EventColor}}\\\hline\end{array}$.
+
+\item State Machine обязательно есть некоторое множество ребер, представляющие возможность перейти из одного состояния в другое.
+Давайте разберем, что эти данные означают:
+\[
+\xymatrix{
+  *+=+[o][F-]{\scriptstyle\texttt{Source}}\ar@/^10pt/[rrr]^{\raisebox{5pt}{$\scriptstyle\texttt{Trigger} \frac{\scriptstyle \texttt{[Guard]}}{\scriptstyle \texttt{Action}}$}}|(0.25){\boxed{\scriptstyle\texttt{OnOut}}}|(0.75){\boxed{\scriptstyle\texttt{OnIn}}}&{}&{}&
+  *+=+[o][F-]{\scriptstyle\texttt{Target}}\\
+}
+\]
+\begin{enumerate}
+\item \verb"Source" -- состояние, из которого машина пытается перейти по ребру.
+
+\item \verb"Target" -- состояние, в которое машина пытается перейти по ребру.
+
+\item \verb"Trigger" -- это название сообщения, которое может запустить переход по ребру.
+Обычно тут фиксируют какое-то множество из которого подходят сообщения.
+В языках программирования это соответствует фиксированному типу.
+В нашем случае это кто-то из $\verb"e"_{\verb"i"}$.
+
+\item \verb"Guard" -- функция возвращающая \verb"true" или \verb"false", принимающая \verb"Source" и \verb"Trigger"%
+\footnote{В оригинальном виде \texttt{Guard} должен еще принимать \texttt{Target}, но на мой взгляд это делает машину менее детерминированной, так как я не хочу смотреть в будущее при принятии решения.}
+(и возможно еще некоторые данные, которые видны всем методам State Machine), которая решает допускать переход по ребру или нет.
+
+\item \verb"Action" -- функция, которая видит:  \verb"Source", \verb"Target" и \verb"Trigger" (и возможно еще некоторые данные, которые видны всем методам State Machine), которая выполняется при переходе по ребру.
+Данная функция у каждого ребра вообще говоря своя.
+
+\item \verb"OnOut" -- функция, которая видит:%
+\footnote{\label{ref::InOutNonStandard}
+В оригинальной версии это действие должно еще видеть \texttt{Target} и \texttt{Trigger}, но тогда теряется логический смысл, что это действие не зависит от ребра.
+Банально сообщения имеют разный тип и для обработки скажем \texttt{Trigger} нам все равно придется делать перебор по разным типам сообщений, что означает, что это скорее всего действие в рамках \texttt{Action}, которое видит все и зависит от ребра.}
+\verb"Source" (и возможно еще некоторые данные, которые видны всем методам State Machine), и выполняется при выходе из \verb"Source" независимо от ребра.
+Она выполняется до \verb"Action", но после \verb"Guard".
+
+\item \verb"OnIn" -- функция, которая видит:%
+\textsuperscript{\ref{ref::InOutNonStandard}}
+\verb"Source" (и возможно еще некоторые данные, которые видны всем методам State Machine), и выполняется при входе в \verb"Target" независимо от ребра.
+Она выполняется после \verb"Action".
+\end{enumerate}
+
+\item Когда я говорю, что какая-то функция видит скажем \verb"Source", то я подразумеваю, что \verb"Source" может хранить какие-то данные внутри.
+При покидании состояния и возвращению в него у State Machine есть два вида поведения:
+\begin{enumerate}
+\item Мы каждый раз заходим в вершину инициализируя ее по умолчанию.
+
+\item Мы запоминаем в каком состоянии была вершина и при возвращении в нее, инициализируем вершину сохраненными данными.
+\end{enumerate}
+По умолчанию мы считаем, что никакой памяти у вершин нет.
+А если надо для какой-то вершины использовать память, ее надо пометить особым образом.
+Я так же буду считать, что вершина \verb"Source" разрушается%
+\footnote{Технически это деталь имплементации, кто где разрушается или создается.
+Но эта деталь помогает думать о State Machine.
+Другой вариант думать, что мы храним все вершины, но знаем, какая активная, и при входе в вершину просто сбрасываем ее содержание, если не было указано помнить историю.}
+по завершению \verb"OnIn" на \verb"Target", а вершина \verb"Target" создается до запуска \verb"Guard".
+Все тяжелые данные, которые не нужны для слежкой за состоянием должны быть в State Machine, а не в ее вершинах.
+\end{enumerate}
+
+\subsubsection{Функционирование}
+
+При создании State Machine, мы обычно передаем ей данные, которые нужны ей для хранения и обработки в течение времени ее функционирования.
+После создания, она находится в нерабочем состоянии, то есть ни одна вершина не является текущим состоянием.
+То есть технически работающая машина состояний -- это пара из описанного выше графа с дополнительными методами и еще стрелка на вершину этого графа.%
+\footnote{Во время имплементации можно как хранить текущую вершину, создавая и разрушая ее, так и хранить все вершины разом и помнить какая активная.}
+И в начале эта стрелка никуда не указывает.
+А потому машину состояний надо запускать явно.
+При этом есть возможность:
+\begin{enumerate}
+\item Запустить машину с <<начальном>> состоянии.
+Мы просто ставим стрелку в него.
+При этом можно передать какие-то инициализирующие состояние данные.
+
+\item Запустить машину с выбранного состояния.
+При этом так же можно передать какие-то инициализирующие состояние данные.
+\end{enumerate}
+Как выполняется переход по ребру:
+\begin{enumerate}
+\item Пусть после старта State Machine находится в следующем состоянии
+\[
+\xymatrix{
+  *+=+[o][F-][F*:EventColor]{\texttt{e}_\texttt{0}}&
+  *+=+[o][F-][F*:InitialStateColor]{\texttt{st}_\texttt{0}}\ar[r]&
+  *+=+[o][F-]{\texttt{st}_\texttt{1}}\ar@/^10pt/[r]\ar[d]&
+  *+=+[o][F-]{\texttt{st}_\texttt{2}}\ar@/^10pt/[l]\ar[d]\\
+  {}\ar@{}[ru]|(.50){}="A"|(0.8){}="B"\ar@[Plum]@{=>} "A";"B" 
+  &
+  {}&
+  *+=+[o][F-]{\texttt{st}_\texttt{3}}\ar[r]&
+  *+=+[o][F-][F*:FinalStateColor]{\texttt{st}_\texttt{4}}\\
+}
+\]
+И прилетает событие $\verb"e"_{\verb"0"}$.
+Предположим, что стрелка $\texttt{st}_\texttt{0}\to\texttt{st}_\texttt{1}$ принимает событие $\verb"e"_{\verb"0"}$.
+
+\item Первым делом создается дефолтно инициализированное состояние $\texttt{st}_\texttt{1}$.
+
+\item Теперь запускается проверка \verb"Guard".
+Он принимает:  $\texttt{st}_\texttt{0}$,  $\texttt{st}_\texttt{1}$,  $\texttt{e}_\texttt{0}$.
+Если он возвращает \verb"false", то событие отвергается и результат сообщается обработчиком события пользователю.
+\[
+\xymatrix{
+  *+=+[o][F-][F*:EventColor]{\texttt{e}_\texttt{0}}&
+  *+=+[o][F-][F*:InitialStateColor]{\texttt{st}_\texttt{0}}\ar[r]&
+  *+=+[o][F-]{\texttt{st}_\texttt{1}}\ar@/^10pt/[r]\ar[d]&
+  *+=+[o][F-]{\texttt{st}_\texttt{2}}\ar@/^10pt/[l]\ar[d]\\
+  {}\ar@{}[ru]|(.50){}="A"|(0.8){}="B"\ar@[Plum]@{=>} "A";"B" 
+  &
+  {\mathmakebox[0pt][r]{\texttt{Guard(st}_\texttt{0}\texttt{, e}_\texttt{0}\texttt{)}}}&
+  *+=+[o][F-]{\texttt{st}_\texttt{3}}\ar[r]&
+  *+=+[o][F-][F*:FinalStateColor]{\texttt{st}_\texttt{4}}\\
+}
+\]
+
+\item Если \verb"Guard" возвращает \verb"true", то событие принимается.
+
+\item Отрабатывает \verb"OnOut" для вершины  $\texttt{st}_\texttt{0}$.
+\[
+\xymatrix{
+  *+=+[o][F-][F*:EventColor]{\texttt{e}_\texttt{0}}&
+  *+=+[o][F-][F*:InitialStateColor]{\texttt{st}_\texttt{0}}\ar[r]&
+  *+=+[o][F-]{\texttt{st}_\texttt{1}}\ar@/^10pt/[r]\ar[d]&
+  *+=+[o][F-]{\texttt{st}_\texttt{2}}\ar@/^10pt/[l]\ar[d]\\
+  {}\ar@{}[ru]|(.50){}="A"|(0.8){}="B"\ar@[Plum]@{=>} "A";"B" 
+  &
+  {\mathmakebox[0pt][r]{\texttt{OnOut(st}_\texttt{0}\texttt{)}}}&
+  *+=+[o][F-]{\texttt{st}_\texttt{3}}\ar[r]&
+  *+=+[o][F-][F*:FinalStateColor]{\texttt{st}_\texttt{4}}\\
+}
+\]
+\item Отрабатывает \verb"Action" для ребра.
+В этот момент мы считаем, что уже покинули $\texttt{st}_\texttt{0}$ и еще не вошли в $\texttt{st}_\texttt{1}$.
+\[
+\xymatrix{
+  *+=+[o][F-][F*:EventColor]{\texttt{e}_\texttt{0}}&
+  *+=+[o][F-][F*:InitialStateColor]{\texttt{st}_\texttt{0}}\ar[r]\ar@{}[r]_(0.55){}="D"&
+  *+=+[o][F-]{\texttt{st}_\texttt{1}}\ar@/^10pt/[r]\ar[d]&
+  *+=+[o][F-]{\texttt{st}_\texttt{2}}\ar@/^10pt/[l]\ar[d]\\
+  {}\ar@{}[ru]|(.50){}="A"|(0.8){}="B"
+  \ar@[Plum]@{=>} "A" +"D" - "B"; "D"
+  &
+  {\mathmakebox[0pt][r]{\texttt{Action(st}_\texttt{0}\texttt{, st}_\texttt{1}\texttt{, e}_\texttt{0}\texttt{)}}}&
+  *+=+[o][F-]{\texttt{st}_\texttt{3}}\ar[r]&
+  *+=+[o][F-][F*:FinalStateColor]{\texttt{st}_\texttt{4}}\\
+}
+\]
+
+\item Отрабатывает \verb"OnIn" для вершины  $\texttt{st}_\texttt{1}$.
+\[
+\xymatrix{
+  *+=+[o][F-][F*:EventColor]{\texttt{e}_\texttt{0}}&
+  *+=+[o][F-][F*:InitialStateColor]{\texttt{st}_\texttt{0}}\ar[r]&
+  *+=+[o][F-]{\texttt{st}_\texttt{1}}\ar@/^10pt/[r]\ar[d]&
+  *+=+[o][F-]{\texttt{st}_\texttt{2}}\ar@/^10pt/[l]\ar[d]\\
+  {}&
+  {\mathmakebox[0pt][r]{\texttt{OnIn(st}_\texttt{1}\texttt{)}}}
+  \ar@{}[ru]|(.50){}="A"|(0.8){}="B"\ar@[Plum]@{=>} "A";"B" &
+  *+=+[o][F-]{\texttt{st}_\texttt{3}}\ar[r]&
+  *+=+[o][F-][F*:FinalStateColor]{\texttt{st}_\texttt{4}}\\
+}
+\]
+
+\item Вершина $\texttt{st}_\texttt{0}$ разрушается.
+И автомат приходит в состояние
+\[
+\xymatrix{
+  {}&
+  *+=+[o][F-][F*:InitialStateColor]{\texttt{st}_\texttt{0}}\ar[r]&
+  *+=+[o][F-]{\texttt{st}_\texttt{1}}\ar@/^10pt/[r]\ar[d]&
+  *+=+[o][F-]{\texttt{st}_\texttt{2}}\ar@/^10pt/[l]\ar[d]\\
+  {} 
+  &
+  {}\ar@{}[ru]|(.50){}="A"|(0.8){}="B"\ar@[Plum]@{=>} "A";"B"&
+  *+=+[o][F-]{\texttt{st}_\texttt{3}}\ar[r]&
+  *+=+[o][F-][F*:FinalStateColor]{\texttt{st}_\texttt{4}}\\
+}
+\]
+\end{enumerate}
+Еще несколько важных замечаний по функционированию State Machine:
+\begin{enumerate}
+\item Если машина находится в незапущенном состоянии, она не реагирует на сообщения.
+
+\item Если машина находится в одном из финальных состояний, она не реагирует на сообщения.
+
+\item Если из одной вершины выходит несколько ребер, которые принимают одно и то же сообщение, то не должно быть возможно получить \verb"true" для более чем одного \verb"Guard"-а.
+
+\item У машины состояний могут быть внутренние ребра из вершины в себя, которые не триггерят \verb"OnOut" и \verb"OnIn".
+Я про эти переходы ничего не говорил, но работают они так же, просто чуть меньше действий выполняется.
+
+\item Могут быть анонимные ребра, это такие ребра, которые не принимают никакой event в качестве триггера.
+Они просто срабатывают по \verb"Guard".
+Такие ребра срабатывают сразу после отработки \verb"OnIn" действия.
+Если \verb"OnIn" не вызывалось (например из-за того что это внутреннее ребро), то и анонимные переходы не срабатывают.
+
+\item Все действия, которые совершаются на ребре: \verb"Guard", \verb"OnOut", \verb"Action", \verb"OnIn" могут быть тривиальными.
+Например \verb"Guard" может возвращать всегда \verb"true", а остальные действия могут просто ничего не делать.
+\end{enumerate}
+
+\subsubsection{Композиция State Machine}
+
+Что прекрасно в машинах состояния -- их можно комбинировать разными способами, что позволяет из очень простых блоков делать достаточно хитрые механизмы для управления логикой состояния чего угодно (но нас будет интересовать именно программное обеспечение).
+
+\paragraph{Параллельные Машины Состояния}
+
+Если у вас есть несколько машин состояния, например $\texttt{S}_\texttt{0}$, $\texttt{S}_\texttt{1}$, то из них можно сделать машину состояний заставив работать параллельно друг с другом.
+То есть вы берете тройку
+\[
+(\texttt{S}_\texttt{0},\;\texttt{S}_\texttt{1})
+\]
+И если пришло какое-то событие, то скармливаете его одновременно всем машинам состояния.
+Технически надо понять, какие у этой машины состояния, какие из них начальные, какие конечные и как работают переходы.
+\begin{enumerate}
+\item Формально, если $S_0$ и $S_1$ -- это множества состояний этих машин соответственно, то для параллельно запущенных машин множество состояний будет декартово произведение $S_0\times S_1$.
+
+\item Начальным состоянием будет единственная пара состоящая из начальных состояний каждой из машин.
+
+\item Финальные состояния так же те состояния, в которых каждая машина находится в финальном состоянии.
+То есть логика такая, пока хотя бы одна машина может продолжать работать, параллельная машина состояний все еще работает и может обрабатывать сообщения.
+
+\item С ребрами будет интереснее.
+Пусть нам дано по ребру из каждой машины
+\[
+\xymatrix{
+  *+=+[o][F-]{\scriptstyle\texttt{A}_1}\ar@/^10pt/[rrr]^{\raisebox{6pt}{$\scriptstyle\texttt{E}\; \frac{\scriptstyle \texttt{[Guard}_1\texttt{]}}{\scriptstyle \texttt{Action}_1}$}}|(0.25){\boxed{\scriptstyle\texttt{Out}_1}}|(0.75){\boxed{\scriptstyle\texttt{In}_1}}&{}&{}&
+  *+=+[o][F-]{\scriptstyle\texttt{B}_1}\\
+}
+\quad\quad\quad
+\xymatrix{
+  *+=+[o][F-]{\scriptstyle\texttt{A}_2}\ar@/^10pt/[rrr]^{\raisebox{6pt}{$\scriptstyle\texttt{E}\; \frac{\scriptstyle \texttt{[Guard}_2\texttt{]}}{\scriptstyle \texttt{Action}_2}$}}|(0.25){\boxed{\scriptstyle\texttt{Out}_2}}|(0.75){\boxed{\scriptstyle\texttt{In}_2}}&{}&{}&
+  *+=+[o][F-]{\scriptstyle\texttt{B}_2}\\
+}
+\]
+Здесь важно, что тип сообщения \verb"E" один и тот же для обоих ребер.
+Если сообщение разные, то только одна из машин сдвинется по своему ребру, а вторая останется на месте.
+Но если сообщение на обоих ребрах одинаковое, то они дают три ребра:
+\[
+\xymatrix@R=60pt@C=100pt{
+  *++[o][F-]{\scriptstyle\texttt{A}_1\times \texttt{A}_2}
+  \ar[r]^{\raisebox{6pt}{$\scriptstyle\texttt{E}\; \frac{\scriptstyle \texttt{[Guard}_1\texttt{]}}{\scriptstyle \texttt{Action}_1}$}}|(0.25){\boxed{\scriptscriptstyle \texttt{Out}_1}}|(0.75){\boxed{\scriptscriptstyle \texttt{In}_1}}
+  \ar[d]_{\raisebox{6pt}{$\scriptstyle\texttt{E}\; \frac{\scriptstyle \texttt{[Guard}_2\texttt{]}}{\scriptstyle \texttt{Action}_2}$}}|(0.25){\boxed{\scriptscriptstyle \texttt{Out}_2}}|(0.75){\boxed{\scriptscriptstyle \texttt{In}_2}}
+  \ar[rd]|(0.25){\boxed{\scriptscriptstyle \texttt{Out}_1,\;\texttt{Out}_2}}|(0.5){\raisebox{0pt}{$\scriptstyle\texttt{E}\; \frac{\scriptstyle \texttt{[Guard}_1\texttt{ \&\& Guard}_2\texttt{]}}{\scriptstyle \texttt{Action}_1,\;\texttt{Action}_2}$}}|(0.75){\boxed{\scriptscriptstyle \texttt{In}_1,\;\texttt{In}_2}}
+  &
+  *++[o][F-]{\scriptstyle\texttt{B}_1\times \texttt{A}_2}
+  \\
+  *++[o][F-]{\scriptstyle\texttt{A}_1\times \texttt{B}_2}
+  &
+  *++[o][F-]{\scriptstyle\texttt{B}_1\times \texttt{B}_2}
+  \\
+}
+\]
+То есть если сработал только $\verb"Guard"_1$, то только первая машина меняет свое состояние $\verb"A"_1$ на $\verb"B"_1$ (горизонтальная стрелка).
+Если сработал только $\verb"Guard"_2$, то только вторая машина меняет свое состояние $\verb"A"_2$ на $\verb"B"_2$ (вертикальная трелка).
+И только если сработали оба условия, то переход идет по диагональному ребру.
+
+\item В предыдущем случае порядок исполнения следующией:
+\begin{enumerate}
+\item В начале исполняются все \verb"Guard"-ы.
+После чего выбирается ребро.
+
+\item После этого для всех вершин выполняются \verb"Out" действия.
+
+\item После этого исполняются все \verb"Action"-ы.
+
+\item После этого выполняются все \verb"In" действия.
+\end{enumerate}
+
+
+\item Стоит отметить важную вещь, что в параллельных машинах плохая идея мутировать сообщение.
+Это часто запрещается, так как в целом противоречит тому, что все сайд эффекты должны быть во внутреннюю память State Machine.
+При последовательном исполнении у вас машины будут видеть разные состояния сообщений, а при многопоточном исполнении, без синхронизации будут data race-ы.
+\end{enumerate}
+
+Полезный простой пример параллельных State Machine.
+Вы можете стартовать с простой машины, которая включает и выключает какую-то опцию в вашей программе.
+Для ее описания можно использовать машину с двумя вершинами
+\[
+\xymatrix{
+    *+=+[o][F*:InitialStateColor][F-]{\texttt{Off}}\ar@/^10pt/[r]&
+  *+=+[o][F-]{\texttt{On}}\ar@/^10pt/[l]\\
+}
+\]
+Теперь если мы хотим добавить вторую фичу в программу, которую тоже хотим включать или выключать, то надо просто взять две такие машины работающие параллельно
+\[
+\xymatrix{
+    {}\ar@{}[r]|(.40){}="A"|(.7){}="B"\ar@[Plum]@{=>} "A";"B"&
+    *+=+[o][F*:InitialStateColor][F-]{\texttt{Off}}
+    \ar@/^10pt/[r]&
+    *+=+[o][F-]{\texttt{On}}
+    {\save [l].[]*+[F-:<3pt>]\frm{}\restore}
+    \ar@/^10pt/[l]&
+    {\mathmakebox[0pt][l]{\texttt{Machine}_\texttt{1}}}\\
+   {}\ar@{}[r]|(.40){}="C"|(.7){}="D"\ar@[Plum]@{=>} "C";"D"&
+     *+=+[o][F*:InitialStateColor][F-]{\texttt{Off}}
+    \ar@/^10pt/[r]&
+    *+=+[o][F-]{\texttt{On}}
+    {\save [l].[]*+[F-:<3pt>]\frm{}\restore}
+    \ar@/^10pt/[l]&
+    {\mathmakebox[0pt][l]{\texttt{Machine}_\texttt{2}}}\\
+}
+\]
+
+\paragraph{Вложенные Машины Состояния}
+
+Можно сделать еще более интересную вещь, а именно у машины состояний состояния сами могут быть машинами состояний.
+Вот простой пример когда это может понадобиться.
+Если у вас есть какая-то фича, которую можно включить и выключить, то скорее всего когда она включена у вас могут быть разные состояния.
+Скажем модуль может быть включен или выключен, а когда включен он может быть в работе или на паузе.
+Тогда такая ситуация хорошо описывается машиной машиной состояния с двумя узлами из предыдущего примера, где узел \verb"On" сам является машиной состояний в двумя возможными опциями \verb"On", \verb"Pause".
+Например можно это изобразить так:
+\[
+\xymatrix{
+  {\texttt{Off}}\save="C" \restore
+  &
+  {\phantom{\texttt{On}}}
+  \ar@<3ex>@/^10pt/[r]&
+  {\texttt{On}}\save="A" \restore
+  &
+  *+=+[o][F-]{\texttt{Play}}\ar@/^10pt/[d]\\
+  {}&
+  {}{}\save="D" \restore
+ &
+  {} \ar@<5ex>@/^10pt/[l]&
+  *+=+[o][F-]{\texttt{Pause}} \save="B" \restore\ar@/^10pt/[u]
+  \save"A" + <-10pt, 17pt>="AA" \restore 
+   \save "B" + <15pt, -14pt>="BB"\restore
+  {\save "AA"."BB"*+[F-:<3pt>]\frm{}\restore}
+    \save"C" + <-10pt, 17pt>="CC" \restore 
+   \save "D" + <1pt, -14pt>="DD"\restore
+  {\save "CC"."DD"*+[F-:<3pt>]\frm{}\restore}
+  \\
+}
+\]
+Такая машина либо включена либо выключена, и во включенном состоянии может переключаться между тремя режимами. 
+Что хорошо в этом случае -- при выключении машины, не нужно задумываться в каком она была состоянии на паузе или в работе.
+Но если мы хотим, то можно сохранять состояние при выключении машины.
+
+Давайте теперь опишем порядок действий при вложенных машинах состояния.
+Рассмотрим следующий пример:
+\[
+\xymatrix{
+  *+=+[o][F-]{\scriptstyle\texttt{A}_2}\save="A" \restore
+  \ar@{}[r]^(0){\raisebox{14pt}{$\texttt{A}_1$}}
+  \ar@/^10pt/[rrr]^{\raisebox{6pt}{$\scriptstyle\texttt{E}\; \frac{\scriptstyle \texttt{[Guard}_2\texttt{]}}{\scriptstyle \texttt{Action}_2}$}}|(0.25){\boxed{\scriptstyle\texttt{Out}_2}}|(0.75){\boxed{\scriptstyle\texttt{In}_2}}&{}&{}&
+  *+=+[o][F-]{\scriptstyle\texttt{B}_2}\save="B" \restore
+  \ar@{}@<13pt>[rrr]|(0.11){}="U"|(0.89){}="W"
+  \ar@/^10pt/ "U" ; "W"^{\raisebox{6pt}{$\scriptstyle\texttt{E}\; \frac{\scriptstyle \texttt{[Guard}_1\texttt{]}}{\scriptstyle \texttt{Action}_1}$}}|(0.25){\boxed{\scriptstyle\texttt{Out}_1}}|(0.75){\boxed{\scriptstyle\texttt{In}_1}}
+  &
+  {}
+  &
+  {}
+  &
+  {}\save="C" \restore\ar@{}[l]_(0){\raisebox{14pt}{$\texttt{B}_1$}}
+    \save"A" + <-10pt, 30pt>="AA" \restore 
+   \save "B" + <4pt, -7pt>="BB"\restore
+  {\save "AA"."BB"*+[F-:<3pt>]\frm{}\restore}
+    \save"C" + <-10pt, 30pt>="CC" \restore 
+   \save "C" + <4pt, -7pt>="DD"\restore
+  {\save "CC"."DD"*+[F-:<3pt>]\frm{}\restore}
+  \\
+}
+\]
+Мы считаем, что внешняя машина находится в состоянии $\verb"A"_1$, а внутренняя в состоянии $\verb"A"_2$.
+При этом обратите внимание, что мы считаем что на сообщение типа \verb"E" могут среагировать обе машины и нарисовали по одному ребру, реагирующему на данное сообщение.
+В этом случае порядок действий <<снизу-вверх>>: в начале реагирует самая глубокая машина, если она не реагирует, то ее содержащая и так далее.
+В нашем случае процесс исполнения будет следующий:
+\begin{enumerate}
+\item Вычисляется $\verb"Guard"_2$ для внутренней машины.
+
+\item Если он дает результат \verb"true", то происходит переход на внутренней машине, а внешняя остается в $\verb"A"_1$:
+\begin{enumerate}
+\item Выполняются действия $\verb"Out"_2$ на выход из вершины $\verb"A"_2$.
+
+\item Выполняется $\verb"Action"_2$.
+
+\item Выполняются действия $\verb"In"_2$ на вход в вершину $\verb"B"_2$.
+\end{enumerate}
+
+\item Если же внутренний \verb"Guard" показал \verb"false", то управление передается внешней машине.
+И проверяется $\verb"Guard"_1$.
+И если он дает \verb"true", то происходит переход по ребру внешней машины.
+Но обратите внимание, что вы при этом покидаете $\verb"A"_2$, а потому порядок действий будет такой:
+\begin{enumerate}
+\item Выполняются действия $\verb"Out"_2$ на выход из вершины $\verb"A"_2$.
+% Вот это оставляет машину в некорректном состоянии.
+
+\item Выполняются действия $\verb"Out"_1$ на выход из вершины $\verb"A"_1$.
+
+\item Выполняется $\verb"Action"_1$.
+
+\item Выполняются действия $\verb"In"_1$ на вход в вершину $\verb"B"_1$.
+\end{enumerate}
+\end{enumerate}
+У внутренней машины всегда приоритет.
+Например если вы жмете на клавишу \verb"Esc", то должно закрыться не все приложение, а только текущее окно.
+
+\subsection{Зачем это нужно в программировании}
+
+% TO DO
+TO DO
+
+\subsection{Имплементация в Compile-Time}
+
+Теперь я хочу обсудить что и как мы хотим имплементировать.
+Во-первых, я бы хотел упростить задачу и имплементировать только простую State Machine, которая не имеет другие State Machine в качестве своих состояний.
+Уже для такой задачи у нас возникает несколько интересных техник, которые я бы хотел обсудить.
+Во-вторых, я буду игнорировать обработку исключений.
+Это не значит, что я буду использовать \verb"new/delete" всюду, но задачи \verb"OnIn" и \verb"OnOut" действий аналогичны задачам конструктора и деструктора для поддержки корректного состояния данных.
+И потому между этими действиями обязана быть автоматическая связь, которую надо заворачивать в декораторы.
+Так же я не стал затрагивать какие-то вопросы посвященные очереди сообщений, которая в основном нужна для вложенных State Machine, чтобы передавать информацию.
+В-третьих, мне не интересно делать run-time имплементацию State Machine.
+Когда вы пишете код, то у вас заранее известны компоненты вашей программы, за что они отвечают, какие ресурсы нужны для работы и по какой логике между ними переключаться.
+Даже наличие динамического количества объектов можно завернуть в эту систему.
+А в compile-time можно с помощью шаблонов очень сильно автоматизировать код, который еще и будет шустро работать.
+
+\subsubsection{Описание графа для State Machine}
+
+Начать я конечно же хочу с описания того, как я вообще хочу использовать будущую библиотеку для создания машины состояния.
+Давайте начнем с конкретного примера диаграммы для State Machine:
+\[
+\xymatrix@R=60pt{
+  *+=+[o][F*:InitialStateColor][F-]{\scriptstyle\texttt{S}_0}\ar@/^10pt/[rrr]^{\raisebox{6pt}{$\scriptstyle\texttt{E}_0\; \frac{\scriptstyle \texttt{[Guard}_0\texttt{]}}{\scriptstyle \texttt{Action}_0}$}}|(0.25){\boxed{\scriptstyle\texttt{Out}_0}}|(0.75){\boxed{\scriptstyle\texttt{In}_1}}
+  &
+  {}
+  &
+  {}
+  &
+  *+=+[o][F-]{\scriptstyle\texttt{S}_1}
+    \ar@/^20pt/[d]^{\raisebox{0pt}{$\scriptstyle\texttt{E}_1\; \frac{\scriptstyle \texttt{[Guard}_1\texttt{]}}{\scriptstyle \texttt{Action}_1}$}}|(0.25){\boxed{\scriptstyle\texttt{Out}_1}}|(0.75){\boxed{\scriptstyle\texttt{In}_2}}
+  \\
+  *+=+[o][F*:FinalStateColor][F-]{\scriptstyle\texttt{S}_3}
+  &
+  {}
+  &
+  {}
+  &
+  *+=+[o][F-]{\scriptstyle\texttt{S}_2}
+  \ar@/^10pt/[lll]^{\raisebox{-12pt}{$\scriptstyle\texttt{E}_3\; \frac{\scriptstyle \texttt{[Guard}_3\texttt{]}}{\scriptstyle \texttt{Action}_3}$}}|(0.25){\boxed{\scriptstyle\texttt{Out}_2}}|(0.75){\boxed{\scriptstyle\texttt{In}_3}}
+      \ar@/^20pt/[u]^{\raisebox{0pt}{$\scriptstyle\texttt{E}_2\; \frac{\scriptstyle \texttt{[Guard}_2\texttt{]}}{\scriptstyle \texttt{Action}_2}$}}|(0.25){\boxed{\scriptstyle\texttt{Out}_2}}|(0.75){\boxed{\scriptstyle\texttt{In}_1}}
+  \\
+}
+\]
+Я буду называть это математическим представлением.
+
+\subsubsection{Описание графа для State Machine в коде}
+
+Давайте я опишу каким бы синтаксисом я задавал подобную машину.
+Вот пример:
+\begin{cppcode}
+namespace detail {
+using namespace SM;
+
+class SmTable {
+  constexpr auto operator()() const noexcept {
+    return transition(
+        *state<S<0>> >>= OnOut<0>,
+        OnIn<1> >>= state<S<1>> >>= OnOut<1>,
+        OnOut<2> <<= state<S<2>> <<= OnIn<2>,
+        state<S<3>> <<= OnIn<3>,
+        state<S<0>> + event<E<0>>[Guard<0>] / Action<0> == state<S<1>>,
+        state<S<1>> + event<E<1>>[Guard<1>] / Action<1> == state<S<2>>,
+        state<S<1>> <= state<S<2>> + event<E<2>>[Guard<2>] / Action<2>,
+        !state<S<3>> <= state<S<2>> + event<E<3>>[Guard<3>] / Action<3>);
+  }
+};
+} // namespace detail
+\end{cppcode}
+Я очень надеюсь, что происходящее угадывается, но на всякий случай подчеркну, что здесь происходит:
+\begin{enumerate}
+\item Прежде всего за состояния у нас отвечают отдельные классы.
+Так как структура State Machine определяется в compile-time, то мы под каждое состояние заводим свой класс.
+То есть состояние -- это НЕ объект класса, а именно имя класса.
+В примере выше я предполагаю, что для состояний мы используем шаблон класса:
+\begin{cppcode}[\nonumbers]
+template<int>
+struct S {};
+\end{cppcode}
+Слово \verb"state" -- это ключевое слово для языка построения таблицы, которое лишь проясняет назначение \verb"S<k>".
+
+\item Под сообщения выделяются шаблоны
+\begin{cppcode}[\nonumbers]
+template<int>
+struct E {};
+\end{cppcode}
+Слово \verb"event" так же является служебным и лишь поясняет роль типа \verb"E<k>".
+
+\item Действия входа и выхода задаются шаблонными методами:
+\begin{cppcode}[\nonumbers]
+template<int x>
+void OnIn(S<x>& state) {
+  /*do something*/
+}
+template<int x>
+void OnOut(S<x>& state) {
+  /*do something*/
+}
+\end{cppcode}
+
+\item Для проверки условия используются шаблонные методы
+\begin{cppcode}[\nonumbers]
+template<int x>
+bool Guard(S<x>& state, const E<x>& event) {
+  return /*something*/;
+}
+\end{cppcode}
+Обратите внимание, что для каждого события \verb"E<x>" свой \verb"Guard", потому он знает тип события.
+Порядок аргументов в методе \verb"Guard" не имеет значения, так же не имеет значения присутствуют ли оба аргумента.
+Вполне возможно сделать \verb"Guard", который вообще не принимает аргументы и все время возвращает \verb"true", или принимает только сообщение или только текущее состояние.
+Для обеспечения поддержки такого механизма нам понадобится диспетчеризация аргументов, которая обсуждалась в разделе~\ref{}.
+
+\item Действия так же задаются шаблонными функциями:
+\begin{cppcode}[\nonumbers]
+template<int x, class = std::enable_if_t<(x != 2)>>
+bool Action(S<x>& source, const E<x>& event, S<x + 1>& target) {
+  return /*something*/;
+}
+
+template<int x, class = std::enable_if_t<(x == 2)>>
+bool Action(S<x>& source, const E<x>& event, S<x - 1>& target) {
+  return /*something*/;
+}
+\end{cppcode}
+Не обращайте внимание на \verb"enable_if" он нужен лишь для того, чтобы для каждого индекса \verb"x" однозначно определялся метод.
+Это нужно для определения только по имени какую из двух функций я имею в виду, когда пишу код вида:
+\begin{cppcode}[\nonumbers]
+state<S<1>>[Guard<1>] / Action<1> == state<S<2>>
+\end{cppcode}
+Так же как и в случае \verb"Guard" порядок аргументов у \verb"Action" не имеет значения, и более того могут использоваться не все из этих аргументов.
+
+\item Еще одно замечание по поводу аргументов всех действий: \verb"OnIn", \verb"OnOut", \verb"Guard", \verb"Action".
+Аргументы могут содержать дополнительные параметры.
+В этом случае эти данные должны храниться в State Machine.
+Это так называемые зависимости или данные, на которые State Machine может влиять во время своего исполнения.
+Обычно машина состояний предоставляет сама внутренний механизм для хранения и инициализации подобных данных.
+Эти данные так же однозначно характеризуются своим типом, то есть нельзя использовать данные одного и того же типа дважды.
+Если вам нужно использовать один и тот же тип, то его надо заворачевать во wrapper с тегом идентификатором, чтобы отличит друг от друга.%
+\footnote{Например подобно тому, как мы идентифицировали  type aliases в разделе~\ref{}.
+Или как мы идентифицировали singleton-ы в разделе~\ref{}.}
+
+\item Есть два вида записей:
+\begin{enumerate}
+\item Записи описывающие вершины с действиями \verb"OnIn" и \verb"OnOut".
+
+\item Записи описывающие переходы между вершинами с \verb"Event", \verb"Guard" и \verb"Action".
+\end{enumerate}
+
+\item Для задания действий на вход и выход можно использовать два вида синтаксиса:
+\begin{cppcode}[\nonumbers]
+OnIn<1> >>= state<S<1>> >>= OnOut<1>
+OnOut<1> <<= state<S<1>> <<= OnIn<1>
+\end{cppcode}
+При этом можно указать только одно действие из двух и другое будет тривиальным.
+\begin{cppcode}[\nonumbers]
+OnIn<1> >>= state<S<1>>
+state<S<1>> >>= OnOut<1>
+OnOut<1> <<= state<S<1>>
+state<S<1>> <<= OnIn<1>
+\end{cppcode}
+
+\item Так же вершины можно отмечать как начальные (с помощью \verb"*") или как финальные (с помощью \verb"!").
+Это можно делать где угодно в любых записях, можно несколько раз указать начальную вершину, главное чтобы она была одна и та же и чтобы она была.
+И можно указать любое количество финальных вершин, но главное чтобы из них не было ребер.
+\begin{cppcode}[\nonumbers]
+*state<S<0>> >>= OnOut<0>
+*state<S<0>> + event<E<0>>[Guard<0>] / Action<0> == state<S<1>>
+state<S<1>> <= *state<S<0>> + event<E<0>>[Guard<0>] / Action<0>
+\end{cppcode}
+
+\item Для описания переходов используется два вида синтаксиса, с указанием назначения до или после описания перехода:%
+\footnote{При этом я не трогаю оператор \texttt{operator=}, чтобы не заигрывать с семантикой языка и не получить по рогам и копытам неожиданным образом.}
+\begin{cppcode}[\nonumbers]
+state<S<0>> + event<E<0>>[Guard<0>] / Action<0> == state<S<1>>
+state<S<1>> <= state<S<0>> + event<E<0>>[Guard<0>] / Action<0>
+\end{cppcode}
+При этом в таком виде можно пропускать событие, гард или действие.
+Например допустимо:
+\begin{cppcode}[\nonumbers]
+state<S<0>> + event<E<0>>[Guard<0>] / Action<0> == state<S<1>>
+state<S<0>>[Guard<0>] / Action<0> == state<S<1>>
+state<S<0>> + event<E<0>> / Action<0> == state<S<1>>
+state<S<0>> + event<E<0>>[Guard<0>] == state<S<1>>
+state<S<0>> / Action<0> == state<S<1>>
+\end{cppcode}
+\end{enumerate}
+
+\subsubsection{Добавление служебных состояний}
+
+Теперь обратим внимание на то, что в коде я могу легко добавить действие \verb"OnIn" для начального состояния и действие \verb"OnOut" для финального:
+\begin{cppcode}[\nonumbers]
+*OnIn<0> >>= state<S<0>> >>= OnOut<0>
+OnOut<3> <<= !state<S<3>> << OnIn<3>
+\end{cppcode}
+Как такое отразить в математическом представлении?
+Для этого нужно ввести два служебных состояния:
+\[
+\xymatrix@R=60pt{
+*+=+[o]{\phantom{\scriptstyle\texttt{Idle}}}&{}&
+  *+=+[o][F*:InitialStateColor][F-]{\scriptstyle\texttt{I}}
+  \ar[rr]|(0.6){\boxed{\scriptstyle\texttt{In}_0}}
+  &{}&
+  *+=+[o][F-]{\scriptstyle\texttt{S}_0}\ar@/^10pt/[rrr]^{\raisebox{6pt}{$\scriptstyle\texttt{E}_0\; \frac{\scriptstyle \texttt{[Guard}_0\texttt{]}}{\scriptstyle \texttt{Action}_0}$}}|(0.25){\boxed{\scriptstyle\texttt{Out}_0}}|(0.75){\boxed{\scriptstyle\texttt{In}_1}}
+  &
+  {}
+  &
+  {}
+  &
+  *+=+[o][F-]{\scriptstyle\texttt{S}_1}
+    \ar@/^20pt/[d]^{\raisebox{0pt}{$\scriptstyle\texttt{E}_1\; \frac{\scriptstyle \texttt{[Guard}_1\texttt{]}}{\scriptstyle \texttt{Action}_1}$}}|(0.25){\boxed{\scriptstyle\texttt{Out}_1}}|(0.75){\boxed{\scriptstyle\texttt{In}_2}}
+  \\
+  {}&{}&
+  *+=+[o][F*:FinalStateColor][F-]{\scriptstyle\texttt{F}}
+  &{}&
+  *+=+[o][F-]{\scriptstyle\texttt{S}_3}
+  \ar[ll]|(0.4){\boxed{\scriptstyle\texttt{Out}_3}}
+  &
+  {}
+  &
+  {}
+  &
+  *+=+[o][F-]{\scriptstyle\texttt{S}_2}
+  \ar@/^10pt/[lll]^{\raisebox{-12pt}{$\scriptstyle\texttt{E}_3\; \frac{\scriptstyle \texttt{[Guard}_3\texttt{]}}{\scriptstyle \texttt{Action}_3}$}}|(0.25){\boxed{\scriptstyle\texttt{Out}_2}}|(0.75){\boxed{\scriptstyle\texttt{In}_3}}
+      \ar@/^20pt/[u]^{\raisebox{0pt}{$\scriptstyle\texttt{E}_2\; \frac{\scriptstyle \texttt{[Guard}_2\texttt{]}}{\scriptstyle \texttt{Action}_2}$}}|(0.25){\boxed{\scriptstyle\texttt{Out}_2}}|(0.75){\boxed{\scriptstyle\texttt{In}_1}}
+  \\
+}
+\]
+Для начального состояния \verb"S<0>" добавляем вершину \verb"I", которая становится новым начальным состоянием и делаем анонимный%
+\footnote{То есть этот переход тригерится автоматически без какого либо события сразу после входа в состояние \texttt{I}.}
+переход из \verb"I" в \verb"S<0>" на которое подвешивается \verb"OnIn" для вершины \verb"S<0>".
+Аналогично для \verb"S<3>" добавляем новую вершину \verb"F", которая становится новым финальным состоянием, и делаем анонимный переход из \verb"S<3>" в \verb"F", на который подвешиваем \verb"OnOut" для \verb"S<3>".
+
+Есть еще одно служебное состояние \verb"Idle", которое нам понадобится.
+Это состояние нужно для того, чтобы описать не запущенную State Machine.
+Оно так же служебное и вводится неявно.
+Его обычно не добавляют в граф, либо можно нарисовать его отдельной изолированной вершиной без действия на в ход и выход.
+\[
+\xymatrix@R=60pt{
+  *+=+[o][F*:IdleColor][F-]{\scriptstyle\texttt{Idle}}&{}&
+  *+=+[o][F*:InitialStateColor][F-]{\scriptstyle\texttt{I}}
+  \ar[rr]|(0.6){\boxed{\scriptstyle\texttt{In}_0}}
+  &{}&
+  *+=+[o][F-]{\scriptstyle\texttt{S}_0}\ar@/^10pt/[rrr]^{\raisebox{6pt}{$\scriptstyle\texttt{E}_0\; \frac{\scriptstyle \texttt{[Guard}_0\texttt{]}}{\scriptstyle \texttt{Action}_0}$}}|(0.25){\boxed{\scriptstyle\texttt{Out}_0}}|(0.75){\boxed{\scriptstyle\texttt{In}_1}}
+  &
+  {}
+  &
+  {}
+  &
+  *+=+[o][F-]{\scriptstyle\texttt{S}_1}
+    \ar@/^20pt/[d]^{\raisebox{0pt}{$\scriptstyle\texttt{E}_1\; \frac{\scriptstyle \texttt{[Guard}_1\texttt{]}}{\scriptstyle \texttt{Action}_1}$}}|(0.25){\boxed{\scriptstyle\texttt{Out}_1}}|(0.75){\boxed{\scriptstyle\texttt{In}_2}}
+  \\
+  {}&{}&
+  *+=+[o][F*:FinalStateColor][F-]{\scriptstyle\texttt{F}}
+  &{}&
+  *+=+[o][F-]{\scriptstyle\texttt{S}_3}
+  \ar[ll]|(0.4){\boxed{\scriptstyle\texttt{Out}_3}}
+  &
+  {}
+  &
+  {}
+  &
+  *+=+[o][F-]{\scriptstyle\texttt{S}_2}
+  \ar@/^10pt/[lll]^{\raisebox{-12pt}{$\scriptstyle\texttt{E}_3\; \frac{\scriptstyle \texttt{[Guard}_3\texttt{]}}{\scriptstyle \texttt{Action}_3}$}}|(0.25){\boxed{\scriptstyle\texttt{Out}_2}}|(0.75){\boxed{\scriptstyle\texttt{In}_3}}
+      \ar@/^20pt/[u]^{\raisebox{0pt}{$\scriptstyle\texttt{E}_2\; \frac{\scriptstyle \texttt{[Guard}_2\texttt{]}}{\scriptstyle \texttt{Action}_2}$}}|(0.25){\boxed{\scriptstyle\texttt{Out}_2}}|(0.75){\boxed{\scriptstyle\texttt{In}_1}}
+  \\
+}
+\]
+
+\subsubsection{Создание и использование машины состояний}
+
+Теперь как я вижу создание самой машины.
+Предположим, что мы описали таблицу переходов для машины как это сделано выше в коде классом \verb"SmTable".
+Теперь можно создать машину так:
+\begin{cppcode}
+namespace detail {
+using namespace SM;
+
+class SmTable {
+  constexpr auto operator()() const noexcept {
+    return transition(/*description of the transition table*/);
+  }
+};
+} // namespace detail
+
+int main() {
+
+  using Machine = SM::StateMachine<detail::SmTable>;
+
+  Machine s;         // starts at Idle state
+  s.process(E<0>{}); // ignores machine is not started
+
+  s.start();         // jumps to I and automatically passes to S<0>
+
+  s.process(E<0>{}); // passes to S<1>
+  s.process(E<0>{}); // ignores and stays at S<1>
+  s.process(E<1>{}); // passes to S<2>
+  s.process(E<2>{}); // passes to S<1>
+  s.process(E<1>{}); // passes to S<2>
+  s.process(E<3>{}); // passes to S<3> and automatically passes to F
+  return 0;
+}
+\end{cppcode}
+Я использую служебное пространство имен \verb"detail" для того, чтобы спрятать \verb"SmTable", потому что \verb"using namespace" нельзя использовать внутри класса, только внутри другого пространства имен.
+Это нужно, чтобы при описании таблицы переходов писать просто \verb"state<S<0>>" или \verb"event<E<0>>" вместо \verb"SM::state<S<0>>" и \verb"SM::event<E<0>>" соответственно.
+А так как я не хочу раскрывать служебные данные из \verb"SM" (пространства имен, где лежит публичный код для использования State Machine), то приходится пользоваться дополнительным пространством имен \verb"detail".
+
+\subsection{Общий план имплементации}
+
+Обратите внимание на то, как в коде выше у нас процесс создания State Machine разбит на два шага:
+\begin{enumerate}
+\item Описание таблицы переходов.
+\begin{cppcode}[\nonumbers]
+namespace detail {
+using namespace SM;
+
+class SmTable {
+  constexpr auto operator()() const noexcept {
+    return transition(/*description of the transition table*/);
+  }
+};
+} // namespace detail
+\end{cppcode}
+
+\item Создание State Machine по таблице переходов.
+\begin{cppcode}[\nonumbers]
+using Machine = SM::StateMachine<detail::SmTable>;
+\end{cppcode}
+\end{enumerate}
+Так можно разделить код на две части:
+\begin{enumerate}
+\item Публичная часть (Front), которая предоставляет пользователю механизмы для описания таблицы переходов.
+Например, служебные слова \verb"state" и \verb"event", а так же операторы \verb"[]", \verb"+" и \verb"/" и т.д.
+Так же эта часть кода делает проверки на корректность данных для задания таблицы.
+В данном случае делаются не содержательные проверки на устройство State Machine, а лишь синтаксические проверки, что пользователь использует только доступные механизмы для описания и использует их корректно.
+
+\item Приватная часть (Back), которая используя таблицу созданную пользователем непосредственно создает класс самой State Machine.
+Эта часть кода делает проверки корректности полученной State Machine.
+Например, что машина имеет в точности одно начальное состояние, что анонимные переходы не имеют циклов и прочее.
+\end{enumerate}
+Ниже я буду придерживаться такого же разделения на FrontEnd и BackEnd.
+Это позволит локализовать контекст решения задач.
+Для создания Front мы по сути хотим создать свой язык внутри C++ для описания таблиц.
+Это так называемый Domain Specific Language (DSL).
+Описание таблицы
+
+\begin{cppcode}
+namespace detail {
+using namespace SM;
+
+class SmTable {
+  constexpr auto operator()() const noexcept {
+    return transition(
+        *state<S<0>> >>= OnOut<0>,
+        OnIn<1> >>= state<S<1>> >>= OnOut<1>,
+        OnOut<2> <<= state<S<2>> <<= OnIn<2>,
+        state<S<3>> <<= OnIn<3>,
+        state<S<0>> + event<E<0>>[Guard<0>] / Action<0> == state<S<1>>,
+        state<S<1>> + event<E<1>>[Guard<1>] / Action<1> == state<S<2>>,
+        state<S<1>> <= state<S<2>> + event<E<2>>[Guard<2>] / Action<2>,
+        !state<S<3>> <= state<S<2>> + event<E<3>>[Guard<3>] / Action<3>);
+  }
+};
+} // namespace detail
+\end{cppcode}
+является примером DSL, где мы с помощью операторов описываем таблицу переходов в очень понятном виде.%
+\footnote{Я считаю это удивительным совпадением.
+Если бы еще была возможность использовать оператор \texttt{=>} вместо \texttt{==}, то было вы вообще идеально.}
+Я хочу построить таблицу перехода (пока не важно как она задается) в compile-time.
+Есть два подхода:
+\begin{enumerate}
+\item Использовать шаблонные классы.
+
+\item Использовать шаблонные \verb"constexpr" переменные (спасибо C++17).
+\end{enumerate}
+Я буду пользоваться вторым подходом.
+Его главное преимущество заключается в том, что с переменными в отличие от типов можно использовать операторы, которые напоминают синтаксис для задания State Machine.
+При этом нас не будут интересовать значения переменных, а информация будет содержаться в типе переменной.
+
+Сама таблица переходов у меня будет состоять из следующих записей
+\begin{cppcode}[\nonumbers]
+(OnEntry, State, OnExit)
+(Source, Event, Guard, Action, Target)
+(State, Type)
+\end{cppcode}
+Первая запись хранит имя состояния и действия на вход и выход для этого состояния.
+Вторая запись отвечает за переход.
+А третья запись для каждой вершины знает ее тип (например что это начальная или финальная вершина или \verb"Idle" состояние и прочее).
+Состояния, события и тип состояния -- это просто классы, потому их можно хранить в списке типов, которые мы обсуждали в разделе~\ref{}.
+А функции \verb"OnEntry", \verb"OnExit", \verb"Guard", \verb"Action" можно спрятать внутрь шаблонного типа можно используя вспомогательный шаблон для хранения типизированного элемента:
+\begin{cppcode}[\nonumbers]
+template<class T, T v>
+struct Value_t {
+  using value_type = T;
+  static constexpr T value = v;
+};
+\end{cppcode}
+Тогда можно писать
+\begin{cppcode}[\nonumbers]
+using Guard = Value_t<decltype(&guard_function), &guard_function>;
+\end{cppcode}
+Это по сути тот же самый подход, который я использовал для хранения списка элементов одного и того же типа, только у нас внутри самого шаблона есть служебные записи для более удобного восстановления аргументов.
+Например мне не надо будет писать метод доступа аналогичный \verb"EL::At" для получения элемента, а можно будет просто написать \verb"Guard::value" и все.
+Еще я вместо хранения пар \verb"(State, Type)" буду отдельно хранить имя начальной вершины и список имен финальных вершин.
+
+Идея имплементации машины состояний такая.
+Мы будем хранить внутри только текущую вершину для текущего состояния.
+Так как все типы заранее известны (включая служебные вершины), то можно использовать \verb"std::variant" и Visitor паттерн для работы с вершинами.
+Вот как может выглядеть шаблон для самой State Machine:
+\begin{cppcode}
+// TEdges        -- List of transitions of the form (Source, Event, Guard, Action, Target)
+// EntryExit     -- List of entries of the form (OnEntry, State, OnExit)
+// InitialStates -- List of initial states
+// TFinalStates  -- List of final states
+// TEvents       -- List of all events
+template<class Edges, class EntryExit, class InitialStates, class TFinalStates, class TEvents>
+class SM<Edges, EntryExit, InitStates, TFinalStates, TEvents> {
+public:
+  using Edges = /*...*/;        // Add edges for pseudostates
+  using States =  /*...*/;      // Extract states from Edges and EntryExit lists
+  using Idle = Back::IdleState; // The Idle state, MUST not be used by the user
+
+private:
+  using StatesExt = TL::PushFront<Idle, I, F, States>;
+  // Extend the States with Idle, I, F states
+  using AState = TL::Convert<StatesExt, std::variant>;
+  // AState = std::variant<Idle, I, F, S<0>, S<1>, S<2>, S<3>>;
+
+public:
+  using Initial = TL::Front<InitStates>; // There must be only one
+  using FinalStates = TFinalStates;
+  using Events = TEvents;
+
+  template<class Event>
+  bool process(Event&& event); // the main processing function
+
+  template<class State>
+  bool isAt() const; // check the state
+
+  void reset();      // move to idle state
+  bool start();      // start from I state
+
+  bool isComplete() const;
+  bool isStarted() const;
+  bool isRunning() const;
+
+  template<class Event>
+  static constexpr bool acceptEvent() noexcept;
+  template<class State>
+  static constexpr bool isValidState() noexcept;
+  template<class State>
+  static constexpr bool isFinalState() noexcept;
+  template<class State>
+  static constexpr bool isInitialState() noexcept;
+
+private:
+  template<class Event>
+  bool processOnce(Event&& event);
+  template<class State>
+  bool forceMoveTo(State&& target)
+
+  template<class State>
+  bool processAnonymousOnce();
+  bool processAnonymousOnce();
+  template<class State>
+  bool processAnonymous();
+  bool processAnonymous();
+
+  AState state_ = Idle{}; // Holds the state of the machine. Idle is the initial one.
+};
+\end{cppcode}
+Так как мы имеем дело с \verb"std::variant", то основной метод для работы со состоянием -- это создание объектов визитеров для определения того, кто лежит внутри и выполнения соответствующих действий уже зная текущий тип состояния.
+Типичная рутина для обработки сообщения \verb"process" будет выглядеть как-то так:
+\begin{enumerate}
+\item Проверить \verb"isRunning" (машина в не \verb"Idle" и не в \verb"F" состоянии).
+Если машина не запущена, то вернуть \verb"false", если запущена идем далее.
+
+\item Проверить обрабатывается сообщение машиной или нет (содержится ли в списке \verb"Events").
+Если нет, то возвращаем \verb"false".
+Если да, то идем дальше.
+
+\item Выполнить обработку события \verb"Event" с помощью визитера.
+Если обработчик вернул \verb"false", значит перехода по ребру не произошло (например не сработал ни один \verb"Guard") и мы тут же возвращаем \verb"false".
+Если обработчик вернул \verb"true" идем дальше.
+
+\item Теперь надо обработать анонимные переходы.
+Это делаем в цикле пока \verb"processAnonyousOnce" возвращает \verb"true".
+После чего возвращаем \verb"true" независимо от того, были ли сделаны анонимные переходы.
+\end{enumerate}
+При написании обработчика события можно на самом деле сделать три разные имплементации:
+\begin{enumerate}
+\item Описанная выше имплементация, когда на каждый единичный переход по ребру мы запускаем визитера.
+То есть на каждое ребро у нас будет отдельный \verb"switch" по всем возможным состояниям из \verb"std::variant".
+
+\item Если мы один раз зашли внутрь \verb"std::variant" и знаем таблицу переходов, то мы точно знаем куда мы можем перейти.
+А потому можно не выходить из визитера, а рекурсивно пройтись по всем ребрам во время компиляции.
+Это избавляет нас от лишнего \verb"switch" на каждое ребро, но добавляет рекурсию.
+
+\item Можно использовать очередь служебных сообщений для управления State Machine и идти не в цикле по анонимным перходам, а в цикле пока очередь событий не будет пустой.
+\end{enumerate}
+Я предпочел первый вариант, так как он самый простой и понятный.
+К нему так же не сложно добавить очередь.
+Рекурсивное решение так же не трудно написать, но оно требует чуть больше интересных решений на уровне шаблонов.
+
+\subsection{FrontEnd Создание DSL для генерации таблицы}
+
+Давайте в начале опишем, что мы хотим сделать и как.
+Я не хочу опускаться до формального уровня описания грамматики языка.%
+\footnote{Не знаю на сколько это к добру.}
+Наша задача уметь задавать таблицы перехода для State Machine в следующем виде
+\begin{cppcode}
+class SmTable {
+  constexpr auto operator()() const noexcept {
+    entry1, entry2, entry3,...., entryn
+  }
+};
+\end{cppcode}
+Здесь \verb"entryk" -- допустимые записи в таблице.
+Теперь нужно объяснить какие записи мы допускаем.
+
+\subsubsection{Записи с одной вершиной}
+
+Первый тип записей поддерживает описание информации связанной с отдельно взятой вершиной.
+В эту информацию входят:
+\begin{enumerate}
+\item Класс отвечающий за состояние.
+
+\item Класс отвечающий за статус состояния (начальная вершина, финальная вершина или обычная%
+\footnote{Возможны и другие состояния в будущем.}
+).
+
+\item Действие \verb"OnEntry" выполняемое на вход в состояние.
+
+\item Действие \verb"OnExit" выполняемое на выходе из состояния.
+\end{enumerate}
+Суть последних двух действий в том, что они работают в паре как конструктор/деструктор и отвечают за корректность состояния данных для работы внутри текущего состояния.
+
+Теперь опишем синтаксис для пользователя, где приведем все возможные варианты:
+\begin{center}
+\begin{tabular}{lll}
+{
+\begin{minipage}[\baselineskip]{5.7cm}
+\begin{cppcode}[\nonumbers]
+state<S>
+state<S> >>= OnExit
+OnExit <<= state<S>
+state<S> <<= OnEntry
+OnEntry >>= state<S>
+OnEntry >>= state<S> >>= OnExit
+OnExit <<= state<S> <<= OnEntry
+\end{cppcode}
+\end{minipage}
+}&{
+\begin{minipage}[\baselineskip]{5.7cm}
+\begin{cppcode}[\nonumbers]
+*state<S>
+*state<S> >>= OnExit
+OnExit <<= *state<S>
+*state<S> <<= OnEntry
+OnEntry >>= *state<S>
+OnEntry >>= *state<S> >>= OnExit
+OnExit <<= *state<S> <<= OnEntry
+\end{cppcode}
+\end{minipage}
+}&{
+\begin{minipage}[\baselineskip]{5.7cm}
+\begin{cppcode}[\nonumbers]
+!state<S>
+!state<S> >>= OnExit
+OnExit <<= !state<S>
+!state<S> <<= OnEntry
+OnEntry >>= !state<S>
+OnEntry >>= !state<S> >>= OnExit
+OnExit <<= !state<S> <<= OnEntry
+\end{cppcode}
+\end{minipage}
+}\\
+\end{tabular}
+\end{center}
+Опишем что есть что.
+\begin{enumerate}
+\item Символ \verb"S" означает любой класс.
+Данные классы должны однозначно идентифицировать состояния машины состояний.
+
+\item \verb"state" -- служебная шаблонная переменная доступная пользователю в публичной части интерфейса библиотеки для создания State Machine.
+
+\item \verb"OnEntry" -- метод возвращающий \verb"void", который может принимать \verb"S" (текущее состояние).
+Принимать он может его как по значению, так и по ссылке на усмотрение пользователя, то есть доступные варианты: \verb"S", \verb"S&", \verb"const S&", \verb"S&&".%
+\footnote{Возможно \texttt{S\&\&} -- не самый разумный вариант, ибо вы поглощаете состояние, над которым исполняете какую-то инициализацию.
+То есть это состояние исчезнет для внешнего наблюдателя.
+Так что по-хорошему такую сигнатуру надо запретить, но я забью на это для простоты.}
+Метод может не принимать текущее состояние вовсе.
+Так же метод может принимать любые другие классы, главное, чтобы они все имели разный тип с точностью до снятия ссылки и \verb"const/volatile" квалификаторов верхнего уровня.%
+\footnote{Два типа будут считаться одинаковыми, если \texttt{std::is\_same\_v<std::remove\_cvref\_t<T>, std::remove\_cvref\_t<U>{}>}  возвращает \texttt{true}.}
+Все дополнительные аргументы должны содержаться внутри State Machine и передаваться с помощью механизма диспетчеризации аргументов для State Machine.%
+\footnote{Я позволю себе считать, что у меня нет дополнительных внутренних данных, опять же для простоты имплементации.}
+
+\item Оператор \verb"*" означает, что состояние помечено как начальное.
+Оператор \verb"!" означает, что состояние помечено как финальное.
+Отсутствие любого из операторов выше помечает состояние как обычное.
+Знак \verb"*" или \verb"!" достаточно поставить у вершины только один раз.
+Если хотя бы раз вершина помечена таким знаком, она становится начальной или финальной соответственно.
+Можно пометить таким знаком одну и ту же вершину несколько раз.
+Единственное ограничение -- нельзя помечать одну и ту же вершину обоими знаками в разных записях.
+
+\item Записи
+\begin{cppcode}[\nonumbers]
+state<S> >>= OnExit
+OnExit <<= state<S>
+\end{cppcode}
+устанавливают действие на выходе из состояния.
+
+\item Записи
+\begin{cppcode}[\nonumbers]
+state<S> <<= OnEntry
+OnEntry >>= state<S>
+\end{cppcode}
+устанавливают действие на входе в состояние.
+
+\item Записи 
+\begin{cppcode}[\nonumbers]
+OnExit <<= state<S> <<= OnEntry
+OnEntry >>= state<S> >>= OnExit
+\end{cppcode}
+одновременно устанавливают оба действия.
+
+\item Допускается для одной и той же вершины несколько раз установить входное (или выходное) действие, но нужно, чтобы во всех случаях это была одна и та же функция.
+Можно вовсе не устанавливать никаких действий, тогда система должна их определить как тривиальные.
+Это служебная функция, которая не принимает ничего и не делает ничего.
+\begin{cppcode}[\nonumbers]
+constexpr bool always_true() noexcept {
+  return true;
+}
+\end{cppcode}
+\end{enumerate}
+
+\subsubsection{Имплементация операторов для одного состояния}
+
+Прежде всего нам понадобится три вспомогательных класса для обозначения статуса состояния:
+\begin{cppcode}[\nonumbers]
+struct Regular;
+struct Initial;
+struct Final;
+
+using StatusList = TL::List<Regular, Initial, Final>;
+\end{cppcode}
+Добавляем список всех поддерживаемых состояний на будущее.
+Теперь нам нужен класс для хранения информации о вершине.
+\begin{cppcode}[\nonumbers]
+template<class S, class Status>
+struct Status {};
+
+template<class S>
+constexpr State<S, Regular> state = {};
+\end{cppcode}
+Таким образом код
+\begin{cppcode}[\nonumbers]
+state<S>
+\end{cppcode}
+создает переменную с типом 
+\begin{cppcode}[\nonumbers]
+State<S, Regular>
+\end{cppcode}
+Чтобы можно было сменить статус вершины, нужно определить два оператора:
+\begin{cppcode}[\nonumbers]
+template<class S, class Status>
+struct Status {
+  constexpr State<S, Initial> operator*() const noexcept {
+    return State<S, Initial>{};
+  }
+  constexpr State<S, Final> operator!() const noexcept {
+    return State<S, Final>{};
+  }
+};
+\end{cppcode}
+Теперь надо заставить работать строчи
+\begin{cppcode}[\nonumbers]
+state<S> >>= OnExit
+OnEntry >>= state<S>
+\end{cppcode}
+Кроме того, раз мы установили действие на выход (или вход), то нет смысла его устанавливать еще раз.
+Например мы не хотим иметь возможность написать так:
+\begin{cppcode}[\nonumbers]
+OnExit1 <<= state<S> >>= OnExit2
+OnEntry1 >>= state<S> <<= OnEntry2
+\end{cppcode}
+А это значит, что у выражения
+\begin{cppcode}[\nonumbers]
+state<S> >>= OnExit
+\end{cppcode}
+не должно быть оператора
+\begin{cppcode}[\nonumbers]
+?? operator<<=(Ex on_exit, state<S>)
+\end{cppcode}
+Но может быть оператор
+\begin{cppcode}[\nonumbers]
+?? operator<<=(state<S>, En on_entry)
+\end{cppcode}
+А для выражения
+\begin{cppcode}[\nonumbers]
+OnEntry >>= state<S>
+\end{cppcode}
+наоборот.
+А потому эти операторы будут возвращать разные типы.
+Я буду их называть по тому, какая информация в них хранится.
+\begin{cppcode}[\nonumbers]
+template<class S, class St, class Ex>
+struct StateExit {
+  Ex on_exit;
+};
+
+template<class S, class St, class En>
+struct StateEntry {
+  En on_entry;
+};
+\end{cppcode}
+Теперь я могу задать указанные операторы так:
+\begin{cppcode}[\nonumbers]
+template<class S, class St>
+struct State {
+  ...
+  template<class Ex, class = std::enable_if_t<!areSame2<State<S, St>, std::remove_cv_t<Ex>>>>
+  constexpr StateExit<S, St, Ex> operator>>=(Ex on_exit) const noexcept {
+    return {on_exit};
+  }
+  ...
+};
+
+template<class S, class St, class En,
+         class = std::enable_if_t<!areSame2<State<S, St>, std::remove_cv_t<En>>>>
+constexpr StateEntry<S, St, En> operator>>=(En on_entry, State<S, St>) noexcept {
+  return {on_entry};
+}
+\end{cppcode}
+Так как все эти операции будут выполняться во время компиляции, я не переживаю и передаю все аргументы по значению, а не по ссылке или как-то еще.
+Я бы мог воспользоваться \verb"consteval", чтобы сделать исполнение только в compile-time принудительно, но что-то я не стал так делать, а надо бы.
+Тут же можно добавить операторы \verb"<<=".
+\begin{cppcode}[\nonumbers]
+template<class S, class St>
+struct State {
+  ...
+  template<class En, class = std::enable_if_t<!areSame2<State<S, St>, std::remove_cv_t<En>>>>
+  constexpr StateEntry<S, St, En> operator<<=(En on_entry) const noexcept {
+    return on_entry >>= *this;
+  }
+  ...
+};
+
+template<class S, class St, class Ex,
+         class = std::enable_if_t<!areSame2<State<S, St>, std::remove_cv_t<Ex>>>>
+constexpr StateExit<S, St, Ex> operator<<=(Ex on_exit, State<S, St> s) noexcept {
+  return s >>= on_exit;
+}
+\end{cppcode}
+Обратите внимание, что я не пишу имплементацию заново, а свожу к уже определенному оператору.
+Теперь добавим полные данные
+\begin{cppcode}[\nonumbers]
+template<class S, class St, class En, class Ex>
+struct StateEntryExit {
+  En on_entry;
+  Ex on_exit;
+};
+\end{cppcode}
+Теперь если у нас есть уже метод входа в состояние, то добавление методов выхода выглядит так:
+\begin{cppcode}[\nonumbers]
+template<class S, class St, class En>
+struct StateEntry {
+  template<class Ex>
+  constexpr StateEntryExit<S, St, En, Ex>
+  operator>>=(Ex on_exit) const noexcept {
+    return {on_entry, on_exit};
+  }
+  En on_entry;
+};
+
+template<class S, class St, class En, class Ex>
+constexpr StateEntryExit<S, St, En, Ex>
+operator<<=(Ex on_exit, StateEntry<S, St, En> s) noexcept {
+  return s >>= on_exit;
+}
+\end{cppcode}
+Аналогично делается добавление входного действия, когда уже есть выходное.
+Я не буду писать уже этот код тут.
+Что важно, все созданные типы не конвертируются друг к другу.
+
+
+
+
+\subsubsection{Записи для переходов таблицы}
+
+Второй тип записей описывает ребра в машине состояний.
+В информацию о ребрах входит следующая информация:
+\begin{enumerate}
+\item Класс отвечающий за состояние \verb"Source" для начала перехода.
+
+\item Класс отвечающий за статус состояния \verb"Source".
+
+\item Класс \verb"Event" отвечающий за тип события.
+Объекты такого типа являются триггерами для данного перехода.
+Если ребро является анонимным переходом (нет события), то мы будем использовать \verb"void".
+
+\item \verb"Guard" -- функция возвращающая \verb"bool".
+Она может принимать текущее состояние и сообщение (как по значению, так и по ссылке).
+Так же может принимать любые другие данные.
+Ограничение на аргументы такое же как и у \verb"OnEntry" и \verb"OnExit": все аргументы должны быть разного типа (после снятия ссылок и \verb"const/reference" квалификаторов самого верхнего уровня).
+
+\item \verb"Action" -- функция возвращающая \verb"void".
+В качестве аргументов может принимать \verb"Source" -- состояние откуда происходит переход, \verb"Target" -- состояние куда происходи переход, \verb"Event" -- соответствующее сообщение.
+Все аргументы могут приниматься как по значению, так и по любому виду ссылок.
+Какие-то из этих аргументов могут отсутствовать.
+Порядок аргументов не важен.
+Могут присутствовать еще другие данные, которые хранятся в State Machine.
+Требование на аргументы такое же как и выше: все аргументы должны быть разного типа (после снятия ссылок и \verb"const/reference" квалификаторов самого верхнего уровня).
+
+\item Класс \verb"Target" отвечающий за состояние куда происходит переход.
+
+\item Класс отвечающий за статус нового состояния \verb"Target".
+\end{enumerate}
+
+Теперь опишем возможные для пользователя операции.
+Здесь я проигнорирую операторы \verb"*" и \verb"!".
+Предполагается, что их можно добавить к любой записи вида \verb"state<S>".
+Доступны постфиксная и префиксная записи для перехода из вершины \verb"S1" в \verb"S2":
+\begin{cppcode}
+// postfix Source ... == Target
+state<S1> + event<Event> [Guard] / Action == state<S2>
+state<S1> + event<Event> [Guard] == state<S2>
+state<S1> + event<Event> / Action == state<S2>
+state<S1> + event<Event>  == state<S2>
+state<S1> [Guard] / Action == state<S2>
+state<S1> [Guard]  == state<S2>
+state<S1> / Action == state<S2>
+// prefix Target <= Source ...
+state<S2> <= state<S1> + event<Event> [Guard] / Action
+state<S2> <= state<S1> + event<Event> [Guard]
+state<S2> <= state<S1> + event<Event> / Action
+state<S2> <= state<S1> + event<Event>
+state<S2> <= state<S1> [Guard] / Action
+state<S2> <= state<S1> [Guard]
+state<S2> <= state<S1> / Action
+\end{cppcode}
+Опишем, что здесь означает что и какие есть требования к компонентам:
+\begin{enumerate}
+\item \verb"S1" обозначает тип класса идентифицирующего состояние из которого происходит переход.
+
+\item \verb"S2" означает тип класса идентифицирующего состояние в которое происходит переход.
+
+\item \verb"state" -- служебная шаблонная переменная для указания роли типа \verb"S" в выражении \verb"state<S>".
+Значит, что \verb"S" идентифицирует состояние.
+
+\item \verb"Event" -- тип сообщений объекты которого являются триггерами перехода.
+
+\item \verb"event" -- служебная шаблонная переменная для указания роли типа \verb"Event" в выражении \verb"event<Event>".
+Значит, что \verb"Event" идентифицирует тип сообщения.
+
+\item \verb"Guard" --  функция возвращающая \verb"bool".
+Может принимать в качестве аргументов состояние \verb"S1" и сообщение \verb"Event".
+Так же может принимать и другие данные.
+Требования на аргументы такие же, как и при описании \verb"OnEntry" и \verb"OnExity" в разделе выше.
+\item Если \verb"Guard" не указан, то используется служебная функция всегда возвращающая \verb"true"
+\begin{cppcode}[\nonumbers]
+constexpr bool always_true() noexcept {
+  return true;
+}
+\end{cppcode}
+
+\item \verb"Action" -- функция возвращающая \verb"void".
+Может принимать в качестве аргументов состояние \verb"S1", сообщение \verb"Event" и новое состояние \verb"S2".
+Может принимать и другие данные.
+Требования к аргументам такие же как и у \verb"Guard".
+\item Если \verb"Action" не указан, то используется служебная функция возвращающая \verb"void" и ничего не делающая
+\begin{cppcode}[\nonumbers]
+constexpr void do_nothing() noexcept {
+}
+\end{cppcode}
+
+\item В указанных выражениях допустимо, чтобы \verb"S1" и \verb"S2" был один и тот же тип.
+Однако, в этом случае обязательно должно быть указано либо сообщение, либо гард, то есть возможны следующие опции:
+\begin{cppcode}
+// postfix Source ... == Target
+state<S> + event<Event> [Guard] / Action == state<S>
+state<S> + event<Event> [Guard] == state<S>
+state<S> + event<Event> / Action == state<S>
+state<S> + event<Event>  == state<S>
+state<S> [Guard] / Action == state<S>
+state<S> [Guard]  == state<S>
+// prefix Target <= Source ...
+state<S> <= state<S> + event<Event> [Guard] / Action
+state<S> <= state<S> + event<Event> [Guard]
+state<S> <= state<S> + event<Event> / Action
+state<S> <= state<S> + event<Event>
+state<S> <= state<S> [Guard] / Action
+state<S> <= state<S> [Guard]
+\end{cppcode}
+Последний переход может показаться странным, потому что мы проверяем \verb"Guard" и без каких либо действий перезаходим в текущее состояние.
+Однако, перезаход в текущее состояние тригерит два действия по умолчанию: \verb"OnExit" и \verb"OnEntry".
+Такое действие по сути сбрасывает текущее состояние в начальное положение.
+Если же допустить переход вида
+\begin{cppcode}[\nonumbers]
+// postfix Source ... == Target
+state<S> / Action  == state<S>
+// prefix Target <= Source ...
+state<S> <= state<S> / Action
+\end{cppcode}
+то он приведет к бесконечному исполнению.
+Без события и гарда, такое действие будет крутиться бесконечно.
+\end{enumerate}
+Теперь я хочу добавить еще один вид переходов -- это внутренние переходы для состояния.
+Это такой переход из состояния в себя, который не тригерит \verb"OnExit" и \verb"OnExit" действия.
+Внутренний переход задается без указания состояния назначения так:
+\begin{cppcode}[\nonumbers]
+state<S1> + event<Event> [Guard] / Action
+state<S1> + event<Event> / Action
+state<S1> [Guard] / Action
+\end{cppcode}
+Обратите внимание, что во всех случаях присутствует \verb"Action".
+Действительно для внутреннего состояния нет смысла поддерживать переходы без действий, потому что в этом случае \verb"OnExit" и \verb"OnEntry" не тригерятся, \verb"Action" ничего не делает, а это значит что данные никак не меняются.
+Но и состояние State Machine тоже не меняется.
+А это означает, что нет смысла их поддерживать, это просто лишнее исполнение.
+Кроме того, обязательно должен присутствовать либо \verb"Guard" либо сообщение (либо оба сразу).
+Потому что анонимные переходы без \verb"Guard" сами в себя будут крутиться в бесконечной рекурсии.
+
+\subsubsection{Имплементация операторов кодирующих переходы}
+
+Здесь я хочу начать с того, чтобы имплементировать все операторы, чтобы скомпилировалась строчка
+\begin{cppcode}[\nonumbers]
+state<S1> + event<E>[Guard] / Action == state<S2>
+\end{cppcode}
+В данном случае происходит вычисление операторов в следующем порядке
+\begin{cppcode}[\nonumbers]
+            event<E>[Guard]
+            event<E>[Guard] / Action
+state<S1> + event<E>[Guard] / Action
+state<S1> + event<E>[Guard] / Action == state<S2>
+\end{cppcode}
+Давайте заведем дополнительно класс для сохранения  информации о сообщении.
+\begin{cppcode}[\nonumbers]
+template<class E>
+struct Event {
+};
+\end{cppcode}
+Так же нам понадобятся
+\begin{cppcode}[\nonumbers]
+template<class E, class G>
+struct EventGuard {
+  G guard;
+};
+
+template<class E, class G, class A>
+struct EventGuardAction {
+  G guard;
+  A action;
+};
+\end{cppcode}
+Теперь добавим оператор \verb"operator[]" так:
+\begin{cppcode}[\nonumbers]
+template<class E>
+struct Event {
+  template<class G>
+  constexpr EventGuard<E, G> operator[](G guard) const noexcept {
+    return {guard};
+  }
+};
+\end{cppcode}
+Теперь оператор добавления действия
+\begin{cppcode}[\nonumbers]
+template<class E, class G>
+struct EventGuard {
+  template<class A>
+  constexpr EventGuardAction<E, G, A> operator/(A action) const noexcept {
+      return {guard, action};
+  }
+  G guard;
+};
+\end{cppcode}
+Давайте сразу обработаем случай, когда нет \verb"Guard".
+В этом случае надо уметь обработать выражение
+\begin{cppcode}[\nonumbers]
+event<E> / Action
+\end{cppcode}
+В этом случае надо определить оператор \verb"operator/" сразу для \verb"Event".
+\begin{cppcode}[\nonumbers]
+
+template<class E>
+struct Event {
+  template<class A>
+  constexpr EventGuardAction<E, Core::TGuard, A>
+  operator/(A action) const noexcept {
+    return {always_true, action};
+  }
+};
+\end{cppcode}
+Тут сразу возвращается тройка вместе с тривиальным \verb"Guard"-ом.
+Теперь нужен оператор сложения между состоянием и тем, что могло быть построено выше.
+То есть надо уметь складывать выражения вида
+\begin{cppcode}[\nonumbers]
+state<S> + event<E>[Guard] / Action
+state<S> + event<E>[Guard]
+state<S> + event<E>
+\end{cppcode}
+Вначале определим классы для хранения результата:
+\begin{cppcode}[\nonumbers]
+template<class S, class St, class E>
+struct StateEvent {
+};
+template<class S, class St, class E, class G>
+struct StateEventGuard {
+  G guard;
+};
+template<class S, class St, class E, class G, class A>
+struct InternalEdge {
+  G guard;
+  A action;
+};
+\end{cppcode}
+А теперь добавляем три оператора в класс \verb"State":
+\begin{cppcode}[\nonumbers]
+template<class S, class St>
+struct State {
+  ...
+  template<class E, class G, class A>
+  constexpr InternalEdge<S, St, E, G, A>
+  operator+(EventGuardAction<E, G, A> edg) const noexcept {
+    return {edg.guard, edg.action};
+  }
+
+  template<class E, class G>
+  constexpr StateEventGuard<S, St, E, G>
+  operator+(EventGuard<E, G> eg) const noexcept {
+    return {eg.guard};
+  }
+
+  template<class E>
+  constexpr StateEvent<S, St, E> operator+(Event<E>) const noexcept {
+    return StateEvent<S, St, E>{};
+  }
+  ...
+};
+\end{cppcode}
+Теперь нужно научиться обрабатывать ситуации следующего вида:
+\begin{cppcode}
+state<S1>[Guard] / Action
+state<S1> Action
+\end{cppcode}
+Для этого добавляем оператор вида:
+\begin{cppcode}[\nonumbers]
+template<class S, class St>
+struct State {
+  template<class G>
+  constexpr StateEventGuard<S, St, void, G> operator[](G guard) const noexcept {
+    return {guard};
+  }
+  template<class A>
+  constexpr InternalEdge<S, St, void, Core::TGuard, A>
+  operator/(A action) const noexcept {
+    return {always_true, action};
+  }
+};
+\end{cppcode}
+После этого мы умеем строить любые выражение в левой части от оператора \verb"operator==" и настало время определить сам оператор.
+Давайте перечислим все что может и что не может стоять слева от этого оператора.
+Слева выражения, а справа их типы:
+\begin{cppcode}[\nonumbers]
+// Ok
+state<S> + event<E>[Guard] / Action // -> InternalEdge<S, St, E, G, A>
+state<S> + event<E>[Guard]          // -> StateEventGuard<S, St, E, G>
+state<S> + event<E> / Action        // -> InternalEdge<S, St, E, G, A>
+state<S> + event<E>                 // -> StateEvent<S, St, E>
+state<S>[Guard] / Action            // -> InternalEdge<S, St, E, G, A> 
+state<S>[Guard]                     // -> StateEventGuard<S, St, E, G>
+state<S> / Action                   // -> InternalEdge<S, St, E, G, A> 
+// Almost OK
+state<S>                            // -> State<S, St>
+// Bad
+event<E>[Guard] / Action            // -> EventGuardAction<E, G, A>
+event<E>[Guard]                     // -> EventGuard<E, G>
+event<E> Action                     // -> EventGuardAction<E, G, A>
+event<E>                            // -> Event<E>
+\end{cppcode}
+Второй аргумент для оператора \verb"operator==" всегда должен быть \verb"State<S, St>", а потому мы лишь должны перебрать все левые аргументы.
+Обратите внимание, что \verb"State<S, St>" почти разрешен как левый аргумент для \verb"operator==".
+А именно, он разрешен если ребро ведет в другое состояние.
+Как обычно в начале надо завести класс для хранения результата
+\begin{cppcode}[\nonumbers]
+template<class S, class St, class E, class G, class A, class T, class TSt>
+struct Edge {
+  G guard;
+  A action;
+};
+\end{cppcode}
+Теперь, имплементацию оператора \verb"operator==" сделаем следующим образом.
+Добавим этот оператор во все классы выше, но для тех классов, для которых этот оператор должен быть не определен, поставим \verb"static_assert" с сообщением, что нельзя задать переход с такими условиями.
+Теперь имплементации:
+\begin{cppcode}[\nonumbers]
+template<class S, class St>
+struct State {
+  ...
+  template<class S1, class St1>
+  constexpr Edge<S, St, void, Guard, Action, S1, St1> operator==(State<S1, St1>) const noexcept {
+    static_assert(!areSame2<std::remove_cv_t<S>, std::remove_cv_t<S1>>,
+                  "Cannot define anonymous transitions from a state to itself!");
+    return {always_true, do_nothing};
+  }
+  ...
+};
+\end{cppcode}
+Здесь \verb"Guard" -- это тип стандартного гарда \verb"always_true", а \verb"Action" -- это тип стандартного пустого действия \verb"do_nothing".
+Теперь для разных видов состояний с дополнительной информацией:
+\begin{cppcode}[\nonumbers]
+template<class S, class St, class E, class G>
+struct StateEventGuard {
+  template<class S1, class St1>
+  constexpr Edge<S, St, E, G, Action, S1, St1>
+  operator==(State<S1, St1>) const noexcept {
+    return {guard, do_nothing};
+  }
+  G guard;
+};
+
+template<class S, class St, class E>
+struct StateEvent {
+  template<class S1, class St1>
+  constexpr Edge<S, St, E, Guard, Action, S1, St1> operator==(State<S1, St1>) const noexcept {
+    return {always_true, do_nothing};
+  }
+};
+
+template<class S, class St, class E, class G, class A>
+struct InternalEdge  {
+  template<class S1, class St1>
+  constexpr Edge<S, St, E, G, A, S1, St1> operator==(State<S1, St1>) const noexcept {
+    return {guard, action};
+  }
+  G guard;
+  A action;
+};
+\end{cppcode}
+И теперь для <<плохих>> случаев:
+\begin{cppcode}[\nonumbers]
+template<class E>
+struct Event {
+  template<class S, class St>
+  constexpr Edge<void, void, E, Guard, Action, S, St> operator==(State<S, St>) const noexcept {
+    static_assert(False<E>, "Cannot define a transition without source!");
+    return {always_true, do_nothing};
+  }
+};
+
+template<class E, class G>
+struct EventGuard {
+  template<class S, class St>
+  constexpr Edge<void, void, E, G, Action, S, St> operator==(State<S, St>) const noexcept {
+    static_assert(False<E>, "Cannot define a transition without source!");
+    return {guard, do_nothing};
+  }
+};
+
+template<class E, class G, class A>
+struct EventGuardAction  {
+  template<class T, class ST>
+  constexpr Edge<void, void, E, G, A, T, ST>  operator==(State<T, ST>) const noexcept {
+    static_assert(False<E>, "Cannot define a transition without source!");
+    return {guard, action};
+  }
+};
+\end{cppcode}
+Еще надо не забыть имплементировать оператор \verb"<=", но его можно целиком засунуть внутрь класса \verb"State" и перегрузить через \verb"operator==".
+
+\subsubsection{Имплементация внутренних переходов}
+
+В этом случае мы хотим допустить следующие записи в таблице переходов (мы это обсуждали выше):%
+\footnote{Данная таблица объясняет почему я назвал получающийся класс не \texttt{StateEventGuardAction} а \texttt{InternalEdge}.}
+\begin{cppcode}[\nonumbers]
+state<S1> + event<Event> [Guard] / Action // -> InternalEdge<S, St, E, G, A>
+state<S1> + event<Event> / Action         // -> InternalEdge<S, St, E, G, A>
+state<S1> [Guard] / Action                // -> InternalEdge<S, St, E, G, A>
+\end{cppcode}
+При этом остаются выражения, которые нам надо запретить следующего вида
+\begin{cppcode}[\nonumbers]
+state<S1> + event<Event>[Guard] // -> StateEventGuard<S, St, E, G>
+state<S1> + event<Event>        // -> StateEvent<S, St, E>
+state<S1>[Guard]                // -> StateEventGuard<S, St, E, G>
+state<S1> / Action              // -> InternalEdge<S, St, E, G, A>
+state<S1>                       // -> State<S, St>
+
+event<Event>[Guard] / Action    // -> EventGuardAction<E, G, A>
+event<Event>[Guard]             // -> EventGuard<E, G>
+event<Event> / Action           // -> EventGuardAction<E, G, A>
+event<Event>                    // -> Event<E>
+\end{cppcode}
+Обратите внимание, что мы можем легко запретить по типу все случаи кроме одного:
+\begin{cppcode}[\nonumbers]
+state<S1> / Action              // -> InternalEdge<S, St, E, G, A>
+\end{cppcode}
+Его можно отличить лишь исследовав само ребро для внутреннего перехода.
+В этом случае событие \verb"E" будет \verb"void" и гард для этого перехода будет тривиальный \verb"always_true".
+Так как возвращаемые значения не подставляются больше ни в какой оператор, то отловить эти случаи так же как мы обрабатывали \verb"operator==" уже не получится.
+А потому я перекину эту работу на следующую часть кода, которая будет конвертировать данные в списки типов.
+
+\subsubsection{Конвертация в список типов}
+\label{section::SMFrontToBackConvert}
+
+Теперь давайте скажем, что у нас получилось.
+Для начала надо сказать, что из себя представляет функция \verb"transition".
+Эта функция просто возвращает tuple от своих аргументов.
+\begin{cppcode}[\nonumbers]
+template<class... Data>
+constexpr Tuple<Data...> transition(Data... data) noexcept {
+  using T = Tuple<Data...>;
+  return T(data...);
+}
+\end{cppcode}
+Вот тут я использую свою кастомную \verb"constexpr" версию \verb"Tuple" элементы которой можно использовать в качестве шаблонных параметров (смотри раздел~\ref{section::Tuple}).
+После вызова этой функции, все методы \verb"OnEntry", \verb"OnExit", \verb"Guard" и \verb"Action" хранятся в полях элементов, а не в самих типах.
+А для удобной работы с будущей таблицей на уровне BackEnd-а, нужно сделать все единообразным и запаковать данные из \verb"Tuple" внутрь типов.
+
+\paragraph{Что я хочу}
+
+Давайте я продемонстрирую на примере, что я хочу сделать и как.
+Вот например у меня есть запись в таблице
+\begin{cppcode}[\nonumbers]
+state<S1> + event<E>[guard] / action == state<S2>
+\end{cppcode}
+где \verb"guard" и \verb"action" -- некоторые функции.
+Тогда
+\begin{cppcode}[\nonumbers]
+transition(state<S1> + event<E>[guard] / action == state<S2>)
+\end{cppcode}
+возвращает объект
+\begin{cppcode}[\nonumbers]
+Edge<S1, St1, E, G, A, S2, St2> t;
+assert(t.guard == guard);
+assert(t.action== action);
+\end{cppcode}
+Здесь \verb"G" -- тип указателя на функцию \verb"guard", а \verb"A" -- тип указателя на функцию \verb"action".
+И мы видим, что типы для этих действий хранятся в виде шаблонных параметров, но сами функции как указатели в run-time параметрах.
+Я же хочу перетащить их внутрь шаблонных параметров так.
+То есть по элементу \verb"t" я хочу построить следующий тип:
+\begin{cppcode}[\nonumbers]
+TL::List<S1, St1, E, Value_t<G, guard>, Value_t<A, action>, S2, St2>
+\end{cppcode}
+
+Теперь рассмотрим другой вид записи
+\begin{cppcode}[\nonumbers]
+on_entry >>= state<S> >>= on_exit
+\end{cppcode}
+Где \verb"on_entry" и \verb"on_exit" -- некоторые функции.
+Теперь
+\begin{cppcode}[\nonumbers]
+transition(on_entry >>= state<S> >>= on_exit)
+\end{cppcode}
+возвращает объект
+возвращает объект
+\begin{cppcode}[\nonumbers]
+StateEntryExit<S, St, En, Ex> t;
+assert(t.on_entry == entry);
+assert(t.on_exit == on_exit);
+\end{cppcode}
+Я хочу заменить элемент \verb"t" на тип следующего вида:
+\begin{cppcode}[\nonumbers]
+TL::List<Value_t<En, on_entry>, S, St, Value_t<Ex, on_exit>>;
+\end{cppcode}
+где \verb"En" -- тип функции \verb"on_entry", а \verb"Ex" -- тип функции \verb"on_exit".
+На выходе у меня будет список содержащий только следующие записи:
+\begin{cppcode}[\nonumbers]
+TL::List<S1, St1, E, Value_t<G, guard>, Value_t<A, action>, S2, St2>
+TL::List<Value_t<En, on_entry>, S, St, Value_t<Ex, on_exit>>
+\end{cppcode}
+Дальше я его разделю на два списка \verb"Edges" и \verb"EnExList" (для первых и вторых записей соответственно).
+После чего отдельно составлю списки:
+\begin{enumerate}
+\item Всех вершин отмеченных хотя бы раз как начальная.
+
+\item всех вершин отмеченных хотя бы раз как конечная.
+\end{enumerate}
+И уже после этого вырежу статусы вершин из данных и у меня будут два списка: \verb"Edge" будет содержать записи вида:
+\begin{cppcode}[\nonumbers]
+TL::List<S1, E, Value_t<G, guard>, Value_t<A, action>, S2>
+\end{cppcode}
+и \verb"EnExList" записи вида
+\begin{cppcode}[\nonumbers]
+TL::List<Value_t<En, on_entry>, S, Value_t<Ex, on_exit>>
+\end{cppcode}
+
+\paragraph{Операции над \texttt{EnExList}}
+
+Для упрощение работы с записями вида
+\begin{cppcode}[\nonumbers]
+TL::List<Value_t<En, on_entry>, S, St, Value_t<Ex, on_exit>>
+\end{cppcode}
+Я определю вспомогательные команды, которые сделают код более читаемым:
+\begin{cppcode}[\nonumbers]
+namespace StateOp {
+template<class Node>
+using State = TL::At<Node, 1>;
+
+template<class Node>
+using Status = TL::At<Node, 2>;
+
+template<class Node>
+using OnEntryW = TL::At<Node, 0>;
+
+template<class Node>
+using OnEntryType = typename OnEntryW<Node>::value_type;
+
+template<class Node>
+constexpr auto OnEntry = OnEntryW<Node>::value;
+
+template<class Node>
+using OnExitW = TL::At<Node, 3>;
+
+template<class Node>
+using OnExitType = typename OnExitW<Node>::value_type;
+
+template<class Node>
+constexpr auto OnExit = OnExitW<Node>::value;
+
+template<class T>
+struct Bind {
+  template<class Node>
+  using is_t = Logic::areSame2_t<T, Status<Node>>;
+  template<class Node>
+  static constexpr bool is = is_t<Node>::value;
+
+  template<class Node>
+  using isSame_t = Logic::areSame2_t<T, State<Node>>;
+  template<class Node>
+  static constexpr bool isSame = isSame_t<Node>::value;
+};
+} // namespace StateOp
+\end{cppcode}
+Здесь из пояснений разве что только требует шаблон \verb"Bind" с его внутренними шаблонами.
+Мне нужны следующие два предиката:
+\begin{enumerate}
+\item Статус \verb"St" вершины в данной записи есть \verb"T".
+
+\item Состояние \verb"S" в данной записи есть \verb"T".
+\end{enumerate}
+Эти предикаты зависят от параметра \verb"T".
+И вот \verb"Bind" нужен как раз для того, чтобы запомнить этот параметр.
+Вот как это работает.
+Пусть у нас есть запись
+\begin{cppcode}[\nonumbers]
+using Node = TL::List<Value_t<En, on_entry>, S, St, Value_t<Ex, on_exit>>;
+\end{cppcode}
+Тогда
+\begin{cppcode}[\nonumbers]
+static constexpr bool res = Bind<S>::template isSame<Node>;
+// res is true
+static constexpr bool res1 = Bind<S1>::template isSame<Node>;
+// res is false if S is not the same type as S1
+\end{cppcode}
+И аналогично для статуса
+\begin{cppcode}[\nonumbers]
+static constexpr bool res = Bind<St>::template is<Node>;
+// res is true
+static constexpr bool res1 = Bind<St1>::template is<Node>;
+// res is false if St is not the same type as St1
+\end{cppcode}
+Самый большой недостаток такого синтаксиса в том, что приходится писать назойливое слово \verb"template" после \verb"::".
+Но тут ничего не поделаешь.
+Мы этот код будем использовать во внутреннем коде и такой синтаксис хотя бы не утечет на сторону пользователя.
+
+\paragraph{Проверки тривиальности действий}
+
+Теперь нам нужно уметь понимать действия \verb"on_entry" и \verb"on_exit" тривиальные или нет.
+То есть совпадают они с нашей функцией \verb"do_nothing" или нет.
+Для этого надо ввести вспомогательные шаблоны проверки условия равенства.
+Однако, тут мы столкнемся с интересной особенностью сравнения указателей на функцию.
+А именно, нельзя сравнивать указатели разной сигнатуры.
+Попытка сравнить два указателя даже если они отличаются флагом \verb"noexcept" влечет ошибку компиляции, а потому для сравнения указателей на функцию придется писать свой метод сравнения.
+Сначала сравниваем по сигнатуре, если они разные, то \verb"false".
+А если они одинаковые, то тогда можно сравнить сами указатели.
+Вот как это должно выглядеть.
+
+Прежде всего вот как выглядит код для служебных методов:
+\begin{cppcode}
+constexpr bool always_true() noexcept {
+  return true;
+}
+using TGuard = decltype(&always_true);
+
+constexpr void do_nothing() noexcept {
+}
+using TAction = decltype(&do_nothing);
+
+using NoAction = Value_t<TAction, do_nothing>;
+using NoGuard = Value_t<TGuard, always_true>;
+\end{cppcode}
+А вот так выглядят методы сравнения указателей на функции
+\begin{cppcode}
+template<class A, class B>
+constexpr std::enable_if_t<!areSame2<A, B>, bool> areSameFunctions(A,
+                                                                   B) noexcept {
+  return false;
+}
+
+template<class A>
+constexpr bool areSameFunctions(A f, A g) noexcept {
+  return f == g;
+}
+\end{cppcode}
+Тогда проверку, что \verb"on_entry" действие тривиально имплементируется так:
+\begin{cppcode}
+namespace detail {
+template<class Node, bool isCorrect = /*checks*/>
+struct isOnEntryTrivialImpl {
+  /*error messages*/
+};
+
+template<class Node>
+struct isOnEntryTrivialImpl<Node, true> : Bool_t<areSameFunctions(OnEntry<Node>, do_nothing)> {};
+} // namespace detail
+
+template<class Node>
+struct isOnEntryTrivial_t : detail::isOnEntryTrivialImpl<Node> {};
+
+template<class Node>
+constexpr bool isOnEntryTrivial = isOnEntryTrivial_t<Node>::value;
+\end{cppcode}
+
+Еще мне понадобятся проверки, что запись является записью про \verb"on_entry" и \verb"on_exit" действия.
+К таким записям относятся элементы \verb"Tuple" следующего вида:
+\begin{cppcode}
+State<S, St>
+StateEntry<S, St, En>
+StateExit<S, St, Ex>
+StateEntryExit<S, St, En, Ex>
+\end{cppcode}
+Я буду считать, что у нас есть следующие шаблоны для проверки:
+\begin{cppcode}
+template<class T>
+struct isState_t : /*implementation*/ {};
+template<class T>
+constexpr bool isState = isState_t<T>::value;
+
+template<class T>
+struct isStateEntry_t : /*implementation*/ {};
+template<class T>
+constexpr bool isStateEntry = isStateEntry_t<T>::value;
+
+template<class T>
+struct isStateExit_t : /*implementation*/ {};
+template<class T>
+constexpr bool isStateExit = isStateExit_t<T>::value;
+
+template<class T>
+struct isStateEntryExit_t : /*implementation*/ {};
+template<class T>
+constexpr bool isStateEntryExit = isStateEntryExit_t<T>::value;
+
+template<class T>
+struct isAnyState_t : Or_w<isState_t<T>, isStateExit_t<T>,
+                           isStateEntry_t<T>, isStateEntryExit_t<T>> {};
+
+template<class T>
+constexpr bool isAnyState = isAnyState_t<T>::value;
+\end{cppcode}
+
+\paragraph{Операции над ребрами}
+
+Для упрощения работы с ребрами, то есть записями вида:
+\begin{cppcode}[\nonumbers]
+TL::List<S1, St1, E, Value_t<G, guard>, Value_t<A, action>, S2, St2>
+\end{cppcode}
+Так же определим вспомогательные операции.
+\begin{cppcode}
+
+namespace EdgeOp {
+template<class Edge>
+using Source = TL::At<Edge, 0>;
+
+template<class Edge>
+using SourceStatus = TL::At<Edge, 1>;
+
+template<class Edge>
+using Event = TL::At<Edge, 2>;
+
+template<class Edge>
+using GuardW = TL::At<Edge, 3>;
+
+template<class Edge>
+using GuardType = typename GuardW<Edge>::value_type;
+
+template<class Edge>
+constexpr auto Guard = GuardW<Edge>::value;
+
+template<class Edge>
+using ActionW = TL::At<Edge, 4>;
+
+template<class Edge>
+using ActionType = typename ActionW<Edge>::value_type;
+
+template<class Edge>
+constexpr auto Action = ActionW<Edge>::value;
+
+template<class Edge>
+using Target =
+    IfElse<areSame2<TL::At<Edge, 5>, void>, Source<Edge>, TL::At<Edge, 5>>;
+
+template<class Edge>
+using TargetStatus = TL::At<Edge, 6>;
+
+template<class Edge>
+struct isInternal_t : areSame2_t<TL::At<Edge, 5>, void> {};
+
+template<class Edge>
+constexpr bool isInternal = isInternal_t<Edge>::value;
+
+template<class Edge>
+constexpr bool isAnonymous = areSame2<Event<Edge>, void>;
+
+template<class Edge>
+struct isAnonymous_t : Bool_t<isAnonymous<Edge>> {};
+
+template<class T>
+struct Bind {
+  template<class Edge>
+  using isSource_t = Logic::areSame2_t<T, std::remove_cv_t<SourceStatus<Edge>>>;
+  template<class Edge>
+  static constexpr bool isSource = isSource_t<Edge>::value;
+
+  template<class Edge>
+  using isSourceSame_t = Logic::areSame2_t<T, std::remove_cv_t<Source<Edge>>>;
+  template<class Edge>
+  static constexpr bool isSourceSame = isSourceSame_t<Edge>::value;
+
+  template<class Edge>
+  using isTarget_t = Logic::areSame2_t<T, std::remove_cv_t<TargetStatus<Edge>>>;
+  template<class Edge>
+  static constexpr bool isTarget = isTarget_t<Edge>::value;
+
+  template<class Edge>
+  using isTargetSame_t = Logic::areSame2_t<T, std::remove_cv_t<Target<Edge>>>;
+  template<class Edge>
+  static constexpr bool isTargetSame = isTargetSame_t<Edge>::value;
+};
+} // namespace EdgeOp
+\end{cppcode}
+Тут все более или менее тоже самое, только для ребра у нас по два шаблона внутри \verb"Bind", так как у ребра две вершины.
+
+Еще нам понадобятся шаблоны для проверки является ли запись ребром.
+При этом у нас может быть два вида ребер с записями следующих типов:
+\begin{cppcode}[\nonumbers]
+Edge<S1, St1, E, G, A, S2, St2>
+InternalEdge<S1, St1, E, G, A>
+\end{cppcode}
+И я буду считать, что у нас есть шаблоны для проверки
+\begin{cppcode}
+template<class T>
+struct isEdge_t : /*implementation*/ {};
+template<class T>
+constexpr bool isEdge = isEdge_t<T>::value;
+
+template<class T>
+struct isInternalEdge_t : /*implementation*/ {};
+template<class T>
+constexpr bool isInternalEdge = isInternalEdge_t<T>::value;
+
+template<class T>
+struct isAnyEdge_t : Or_w<isEdge_t<T>, isInternalEdge_t<T>> {};
+template<class T>
+constexpr bool isAnyEdge = isAnyEdge_t<T>::value;
+\end{cppcode}
+С помощью последних двух методов я смогу спокойно отбирать из \verb"Tuple" записей соответствующих любому из двух видов ребер.
+
+\paragraph{Перепаковка \texttt{EnExList} записей}
+
+Здесь мы будем перерабатывать запись из \verb"Tuple" в тип.
+Публичный интерфейс
+\begin{cppcode}
+template<auto st>
+struct PackStateInType_t
+    : detail::PackStateInTypeImpl<std::remove_cv_t<decltype(st)>, st> {};
+
+template<auto st>
+using PackStateInType = typename PackStateInType_t<st>::type;
+\end{cppcode}
+Общая имплементация используется для сообщения об ошибках
+\begin{cppcode}
+namespace detail {
+template<class S, auto st>
+struct PackStateInTypeImpl {
+  static_assert(False<S>, "The argument of PackStateInType MUST be a state from DSL: "
+                "State, StateExit, StateEntry, StateEntryExit!");
+};
+} // namespace detail
+\end{cppcode}
+Перепаковка происходит в специализациях.
+Так как у нас приходит $4$ типа записей сюда, то надо написать $4$ специализации:
+\begin{cppcode}
+namespace detail {
+template<class S, class St, State<S, St> st>
+struct PackStateInTypeImpl<State<S, St>, st> {
+  using type = TL::List<NoAction, S, St, NoAction>;
+  using value_type = type;
+  static constexpr value_type value = type{};
+};
+
+template<class S, class St, class Ex, StateExit<S, St, Ex> st>
+struct PackStateInTypeImpl<StateExit<S, St, Ex>, st> {
+  using type = TL::List<NoAction, S, St, Value_t<Ex, st.on_exit>>;
+  using value_type = type;
+  static constexpr value_type value = type{};
+};
+
+template<class F, class St, class En, StateEntry<S, St, En> st>
+struct PackStateInTypeImpl<StateEntry<S, St, En>, st> {
+  using type = TL::List<Value_t<En, st.on_entry>, S, St, NoAction>;
+  using value_type = type;
+  static constexpr value_type value = type{};
+};
+
+template<class S, class St, class En, class Ex, StateEntryExit<S, St, En, Ex> st>
+struct PackStateInTypeImpl<StateEntryExit<S, St, En, Ex>, st> {
+  using type = TL::List<Value_t<En, st.on_entry>, S, St, Value_t<Ex, st.on_exit>>;
+  using value_type = type;
+  static constexpr value_type value = type{};
+};
+} // namespace detail
+\end{cppcode}
+
+\paragraph{Перепаковка ребер}
+
+Перепаковка ребер делается по той же схеме, только опций всего две, а не четыре.
+Мы также хотим перепаковать запись из \verb"Tuple" в шаблон с параметрами.
+Публичный интерфейс будет такой:
+\begin{cppcode}
+template<auto edge>
+struct PackEdgeInType_t
+    : detail::PackEdgeInTypeImpl<std::remove_cv_t<decltype(edge)>, edge> {};
+
+template<auto edge>
+using PackEdgeInType = typename PackEdgeInType_t<edge>::type;
+\end{cppcode}
+Как обычно общая имплементация используется для сообщения об ошибках:
+\begin{cppcode}
+namespace detail {
+template<class E, auto edge>
+struct PackEdgeInTypeImpl {
+  static_assert(False<E>, "The argument of PackInType MUST be and Edge or InternalEdge!");
+};
+} // namespace detail
+\end{cppcode}
+И теперь две специализации для каждого вида ребер:
+\begin{cppcode}
+template<class S1, class St1, class E, class G, class A, class S2, class St2,
+         Edge<S1, St1, E, G, A, S2, St2> edge>
+struct PackEdgeInTypeImpl<Edge<S1, St1, E, G, A, S2, St2>, edge> {
+  using type = TL::List<S1, St1, E, Value_t<G, edge.guard>, Value_t<A, edge.action>, S2, St2>;
+  using value_type = type;
+  static constexpr value_type value = type{};
+};
+
+template<class S, class St, class E, class G, class A, InternalEdge<S, St, E, G, A> edge>
+struct PackEdgeInTypeImpl<InternalEdge<S, St, E, G, A>, edge> {
+  using type = TL::List<S, St, E, Value_t<G, edge.guard>, Value_t<A, edge.action>, void, void>;
+  using value_type = type;
+  static constexpr value_type value = type{};
+};
+\end{cppcode}
+Обратите внимание, что именно в этом месте мы выделяем внутренние переходы с помощью \verb"void" в качестве состояния назначения ребра.
+
+\paragraph{Перепаковка данных для BackEnd}
+
+Теперь как устроена перепаковка таблицы.
+У нас дан класс для генерации таблицы
+\begin{cppcode}
+struct SmTable {
+  constexpr auto operator()() const noexcept {
+    return transition(/*table description*/);
+  }
+};
+\end{cppcode}
+Теперь мы хотим взять \verb"SmTable" и вернуть два списка.
+Первый содержит записи вида:
+\begin{cppcode}
+TL::List<Value_t<En, on_entry>, S, St, Value_t<Ex, on_exit>>;
+\end{cppcode}
+Второй содержит записи вида:
+\begin{cppcode}
+TL::List<S1, St1, E, Value_t<G, guard>, Value_t<A, action>, S2, St2>
+\end{cppcode}
+Для этого заведем специальный шаблон:
+\begin{cppcode}
+template<class Table>
+struct ExtractTransitionData_t {
+  static constexpr auto data = Table{}();
+
+  template<auto x>
+  struct IsState : DSL::isAnyState_t<std::remove_cv_t<decltype(x)>> {};
+  template<auto x>
+  struct IsEdge : DSL::isAnyEdge_t<std::remove_cv_t<decltype(x)>> {};
+
+  static constexpr auto s_data = Filter<IsState, data>;
+  static constexpr auto e_data = Filter<IsEdge, data>;
+
+  using StateList = TL::NoDuplicates<
+      TL::ConvertToList<TL::RemoveCVRec<Apply_t<PackStateInType_t, s_data>>>>;
+  using EdgeList = TL::NoDuplicates<
+      TL::ConvertToList<TL::RemoveCVRec<Apply_t<PackEdgeInType_t, e_data>>>>;
+  using type = TL::List<StateList, EdgeList>;
+};
+
+template<class Table>
+using ExtractTransitionData = typename ExtractTransitionData_t<Table>::type;
+\end{cppcode}
+Давайте прокомментирую код
+\begin{enumerate}
+\item В начале мы создаем \verb"Tuple" содержащий всю информацию вызывая оператор \verb"operator()" на объекте \verb"Table{}".
+
+\item Чтобы вытащить из \verb"Tuple" другую \verb"Tuple" состоящую только из записей одного вида нужен предикат.
+У нас уже есть предикат от типа элемента, но для \verb"Tuple" нужен предикат от самого элемента.
+Тут мы определяем такие предикаты \verb"IsState" и \verb"IsEdge".
+
+\item Далее мы создаем два отдельных \verb"Tuple" содержащих только записи отдельного вида.
+
+\item После чего идут две распаковки.
+Давайте разберемся с первой из них, вторая работает аналогично:
+\begin{cppcode}
+TL::NoDuplicates<
+    TL::ConvertToList<
+        TL::RemoveCVRec<
+            Apply_t<PackStateInType_t, s_data>
+        >
+    >
+>;
+\end{cppcode}
+Пусть у нас \verb"s_data" выглядит так:
+\begin{cppcode}
+Tuple<StateEntryExit<S1, St1, En1, Ex1>, StateEntryExit<S2, St2, En2, Ex2>> s_data;
+\end{cppcode}
+Это значит, что у нас две записи.
+При этом внутри каждой записи мы храним действия \verb"on_entry" и \verb"on_exit".
+После применения \verb"Apply_t" (см.~\ref{}) получим тип (\verb"Apply" возвращает новый \verb"Tuple", а \verb"Apply_t" возвращает тип объекта):
+\begin{cppcode}
+Tuple<TL::List<Value_t<En1, on_entry1>, S1, St1, Value_t<Ex1, on_exit1>>,
+      TL::List<Value_t<En2, on_entry2>, S2, St2, Value_t<Ex2, on_exit2>>>
+\end{cppcode}
+Дальше мы рекурсивно убираем все \verb"const/volatile" квалификаторы.
+Потом преобразуем внешний \verb"Tuple" к \verb"TL::List".
+И под конец убираем дублирующиеся записи.
+
+\item В самом конце возвращается пара из двух списков
+\begin{cppcode}
+TL::List<EnExList, EdgeList>
+\end{cppcode}
+\end{enumerate}
+Для доступа к последним листам я сделаю методы доступа:
+\begin{cppcode}
+template<class Data>
+using EnExList = TL::At<Data, 0>;
+template<class Data>
+using EdgeList = TL::At<Data, 1>;
+\end{cppcode}
+
+Здесь я хочу добавить еще небольшой кусок кода для проверки.
+Дело в том, что сейчас мы проигнорировали в таблице все записи, которые не подходят под предикаты \verb"IsState" и \verb"IsEdge".
+А они могли быть, если пользователь вбил что-то не то в качестве записи таблицы перехода.
+И пользователь мог подумать, что это дает какой-то элемент в таблице, а на деле его нет.
+Потому в этом случае лучше сообщить об ошибке.
+Это можно сделать так: составим список всех записей, выкинем из него список из отобранных записей и проверим результат на пустоту.
+После определения \verb"s_data" и \verb"e_data" можно добавить следующий код
+\begin{cppcode}
+  using TFullList = TL::RemoveCVRec<std::remove_cv_t<decltype(data)>>;
+  using TSList = TL::RemoveCVRec<std::remove_cv_t<decltype(s_data)>>;
+  using TEList = TL::RemoveCVRec<std::remove_cv_t<decltype(e_data)>>;
+  using TSEList = TL::Merge2<TSList, TEList>;
+  using TUnList = TL::Diff<TFullList, TSEList>;
+
+  static_assert(TL::isEmpty<TUnList>, "Unsupported entry of transition table!");
+\end{cppcode}
+Сами списки мы получаем как тип соответствующего \verb"Tuple", который мы получаем с помощью \verb"decltype".
+Дальше мы рекурсивно убираем все квалификаторы \verb"const/volatile", которые могли объявиться из-за \verb"constexpr" контекста.
+И потом находим разность между всеми записями и отобранными.
+Тут же можно сделать печать списка, если он не пуст, чтобы сообщить пользователю, какие именно записи были лишними.
+Но я не стал так заморачиваться.
+
+\paragraph{Получение списка всех возможных состояний}
+
+Для создания State Machine нужно иметь полный список состояний.
+Он спрятан в двух списках, которые мы построили в прошлом разделе.
+Теперь надо вытащить все состояния.
+Для ребер это их начала и концы, для записей вершин это сами вершины.
+Как обычно используем имплементацию для проверки корректности данных
+\begin{cppcode}
+template<class Data, bool isCorrect = /*checks*/>
+struct ExtractStatesImpl {
+  static_assert(
+      TL::isList<Data>, "The argument of ExtractStates MUST be a list of transition data!");
+  ...
+};
+\end{cppcode}
+После чего для корректных данных имплементируем вычленение состояний:
+\begin{cppcode}
+template<class Data>
+struct ExtractStatesImpl<Data, true> {
+  using StList = StateList<Data>;
+  using EdgeList = EdgeList<Data>;
+  
+  using StStates = TL::NoDuplicates<TL::Map<DSL::StateOp::State, StList>>;
+  using EdgeSources = TL::NoDuplicates<TL::Map<DSL::EdgeOp::Source, EdgeList>>;
+  using EdgeTargets =
+      TL::EraseAll<TL::NoDuplicates<TL::Map<DSL::EdgeOp::Target, EdgeList>>,
+                   void>;
+  using type = TL::NoDuplicates<TL::Merge<StStates, EdgeSources, EdgeTargets>>;
+};
+\end{cppcode}
+Код в целом все делает в лоб.
+Можно было бы избавление от дублей сделать в самом конце и не делать на промежуточных списках, но это не так принципиально.
+И теперь публичная часть:
+\begin{cppcode}
+template<class TList>
+struct ExtractStates_t : detail::ExtractStatesImpl<TList> {};
+
+template<class TList>
+using ExtractStates = typename ExtractStates_t<TList>::type;
+\end{cppcode}
+
+
+\paragraph{Получение списка начальных состояний}
+
+Теперь нужно выделить из всех состояний только начальные и только конечные.
+Я пропущу проверку корректности и сразу разберем специализацию для проверенных аргументов:
+\begin{cppcode}
+template<class TList>
+struct ExtractInitialStatesImpl<TList, true> {
+  using StList = EnExList<TList>;
+  using EdgeList = EdgeList<TList>;
+
+  using InitStList = TL::NoDuplicates<TL::Map<
+      DSL::StateOp::State,
+      TL::Filter<DSL::StateOp::Bind<Core::Initial>::template is_t, StList>>>;
+
+  using InitSourceList = TL::NoDuplicates<
+      TL::Map<DSL::EdgeOp::Source,
+              TL::Filter<DSL::EdgeOp::Bind<Core::Initial>::template isSource_t,
+                         EdgeList>>>;
+  using InitTargetList = TL::NoDuplicates<
+      TL::Map<DSL::EdgeOp::Target,
+              TL::Filter<DSL::EdgeOp::Bind<Core::Initial>::template isTarget_t,
+                         EdgeList>>>;
+
+  using type =
+      TL::NoDuplicates<TL::Merge<InitStList, InitSourceList, InitTargetList>>;
+};
+\end{cppcode}
+И публичная часть для пользователя:
+\begin{cppcode}
+template<class TList>
+struct ExtractInitialStates_t : detail::ExtractInitialStatesImpl<TList> {};
+
+template<class TList>
+using ExtractInitialStates = typename ExtractInitialStates_t<TList>::type;
+\end{cppcode}
+Вычленение конечных состояний выполняется точно так же.
+Потому не буду его тут расписывать.
+
+\paragraph{Получение списка всех возможных событий}
+
+События встречаются только в списке ребер.
+Потому нам не нужны записи о вершинах.
+И я так же пропущу общую версию шаблона с проверками:
+\begin{cppcode}
+template<class Edges>
+struct ExtractEventsImpl<Edges, true> {
+  using type =
+      TL::EraseAll<TL::NoDuplicates<TL::Map<DSL::EdgeOp::Event, Edges>>, void>;
+};
+\end{cppcode}
+И публичная часть кода:
+\begin{cppcode}
+template<class Edges>
+struct ExtractEvents_t : detail::ExtractEventsImpl<Edges> {};
+
+template<class Edges>
+using ExtractEvents = typename ExtractEvents_t<Edges>::type;
+\end{cppcode}
+
+\paragraph{Вырезаем статусы из ребер}
+
+Теперь когда мы знаем статусы всех вершин, потому что знаем полный список вершин и списки начальных и конечных вершин, мы можем вырезать эти статусы из всех ребер.
+В начале нужен метод для обработки одного ребра:
+\begin{cppcode}
+namespace detail {
+template<class Edge>
+struct TrimEdge_t : TL::Slice_t<Edge, EL::List<int, 0, 2, 3, 4, 5>> {};
+template<class Edge>
+using TrimEdge = typename TrimEdge_t<Edge>::type;
+\end{cppcode}
+То есть мы игнорируем вторую и последнюю запись в ребре.
+Теперь надо ишь применить эту операцию ко всем ребрам.
+Если пропустить проверки, то содержательный код выглядит так:
+\begin{cppcode}
+template<class Edges>
+struct TrimEdgesImpl<Edges, true> {
+  using type = TL::Map<TrimEdge, Edges>;
+};
+\end{cppcode}
+И публичная часть для пользователя
+\begin{cppcode}
+template<class Edges>
+struct TrimEdges_t : detail::TrimEdgesImpl<Edges> {};
+
+template<class Edges>
+using TrimEdges = typename TrimEdges_t<Edges>::type;
+\end{cppcode}
+
+\paragraph{Склеиваем и прореживаем записи для входных/выходных данных}
+
+С записями вершин пока что хаос.
+Синтаксис FrontEnd-а позволяет следующие записи
+\begin{cppcode}
+*S
+on_entry >>= S
+on_entry >>= S >>= on_exit
+S >>= on_exit
+\end{cppcode}
+В итоге у нас может содержаться аж $4$ записи приходящиеся на одно состояние.
+При перепаковке мы теперь имеем $4$ записи вида
+\begin{cppcode}
+TL::List<Value_t<A,  do_nothing>, S, Initial, Value_t<A,  do_nothing>>
+TL::List<Value_t<En, on_entry>,   S, Regular, Value_t<A,  do_nothing>>
+TL::List<Value_t<En, on_entry>,   S, Regular, Value_t<Ex, on_exit>>
+TL::List<Value_t<A,  do_nothing>, S, Regular, Value_t<Ex, on_exit>>
+\end{cppcode}
+Нам надо проверить, что среди всех таких записей с одинаковым \verb"S" на входное действие указано не более одного нетривиального действия, и аналогично для выходного действия.
+Потому нам надо склеить эти $4$ записи в одну и отрезать статус вершины:
+\begin{cppcode}
+TL::List<Value_t<En, on_entry>, S, Value_t<Ex, on_exit>>
+\end{cppcode}
+Поэтому все танцы с бубном ниже будут связаны с попыткой произвести все указанные действия корректно.
+Кроме того, я хочу, чтобы в этой таблице для каждого состояния \verb"S" присутствовала в точности одна запись.
+А потому для отсутствующих состояний надо будет добавить записи с тривиальными действиями на вход и выход.
+Это было не обязательно делать, но это упростит работу с кодом внутри машины состояний.
+Я опять проигнорирую проверку условий корректности и перейду к сути имплементации:
+\begin{cppcode}
+template<class EnExList, class States>
+struct ExtractEntryExitImpl<EnExList, States, true> {
+  template<class Node>
+  using IsOnEntryNonTrivial =
+      Logic::Not_w<DSL::StateOp::isOnEntryTrivial_t<Node>>;
+  template<class S>
+  using OnEntryList = TL::NoDuplicates<
+      TL::Map<DSL::StateOp::OnEntryW,
+              TL::Filter<IsOnEntryNonTrivial,
+                         TL::Filter<DSL::StateOp::Bind<S>::template isSame_t,
+                                    EnExList>>>>;
+  using Empty = TL::EmptyLike<EnExList>;
+  using LNoAction = TL::MakeLike<NoAction, Empty>;
+
+  using OnEntryActions = TL::Map<OnEntryList, States>;
+
+  template<class S>
+  using IsOnExitNonTrivial = Logic::Not_w<DSL::StateOp::isOnExitTrivial_t<S>>;
+  template<class St>
+  using OnExitList = TL::NoDuplicates<
+      TL::Map<DSL::StateOp::OnExitW,
+              TL::Filter<IsOnExitNonTrivial,
+                         TL::Filter<DSL::StateOp::Bind<St>::template isSame_t,
+                                    EnExList>>>>;
+  using OnExitActions = TL::Map<OnExitList, States>;
+
+  template<class List>
+  using AddTrivialAction = IfElse_u<TL::isEmpty<List>, Type_t<NoAction>, TL::Front_t<List>>;
+  
+  using OnEntryActionList = TL::Map<AddTrivialAction, OnEntryActions>;
+  using OnExitActionList = TL::Map<AddTrivialAction, OnExitActions>;
+  
+  using type = TL::Map<TL::Join, TL::Zip<TL::Zip<OnEntryActionList, States>,
+                                         TL::Map<TL::List, OnExitActionList>>>;
+};
+\end{cppcode}
+% TO DO
+% Надо разобраться с типами списков в точности!
+Давайте разберемся, что тут происходит:
+\begin{enumerate}
+\item В начале заводим предикат \verb"IsOnEntryNonTrivial", чтобы отобрать все записи, где есть нетривиальное действие на вход.
+
+\item Мы хотим для каждого состояния \verb"S" построить список из записей, где действие \verb"on_entry" не тривиальное.
+Так как \verb"S" у нас неизвестное и будет пробегать весь список \verb"States", то мы задаем шаблон \verb"OnEntryList" для такого действия.
+
+\item Давайте разбираться как работает шаблон:
+\begin{cppcode}[\nonumbers]
+template<class S>
+using OnEntryList = TL::NoDuplicates<
+    TL::Map<DSL::StateOp::OnEntryW,
+            TL::Filter<IsOnEntryNonTrivial,
+                       TL::Filter<DSL::StateOp::Bind<S>::template isSame_t, EnExList>>>>;
+\end{cppcode}
+Внутри мы делаем \verb"Bind<S>" и вызываем оператор сравнения с \verb"S".
+Операция \verb"Filter" таким образом отбирает все вершины, с состоянием \verb"S".
+После чего следующая операция \verb"Filter" отбирает среди таких записей те, что содержат нетривиальное \verb"on_entry" действие.
+После чего операция \verb"Map" применяет ко всем полученным записям \verb"OnEntryW" вычленяя тип вида \verb"Value_t<En, on_entry>".
+В конце мы избавляемся от дубликатов.
+И в этом месте стоит проверить, что размер полученного списка не более чем $1$, но я пожалуй пропущу это.
+
+\item Далее мы просто применяем \verb"OnEntryList" для всех возможных состояний.
+В итоге у нас для каждого состояния \verb"S" получается список из записей вида
+\verb"Value_t<En, on_entry>".
+
+\item Дальше идет аналогичное выделение списка нетривиальных действий на выход, которые складываются в \verb"OnExitActions".
+
+\item Теперь обсудим, что мы сейчас имеем.
+\begin{cppcode}[\nonumbers]
+OnEntryActions = TL::List<OnEntryActionS1, OnEntryActionS2, ...>
+OnExitActions =  TL::List<OnExitActionS1, OnExitActionS2, ...>
+// where
+OnEntryActionS1 = TL::List<Value_t<En1, on_entry1>,
+                           Value_t<En2, on_entry2>,
+                           ... >
+...
+OnExitActionS1 =  TL::List<Value_t<Ex1, on_exit1>,
+                           Value_t<Ex2, on_exit2>,
+                           ... >
+...
+\end{cppcode}
+Здесь внешний список \verb"OnEntryActions" имеет такой же размер как \verb"States" и для $k$-ого состояния \verb"Sk" он хранит список всех заданных пользователем действий вида \verb"on_entry".
+Внутренний список всех действий для вершины \verb"Sk" я обозначил \verb"OnEntryActionSk".
+И для каждого такого списка может быть три случая:
+\begin{cppcode}[\nonumbers]
+1) OnEntryActionS = TL::List<>
+2) OnEntryActionS = TL::List<Value_t<En, on_entry>>
+3) OnEntryActionS = TL::List<Value_t<En1, on_entry1>,
+                             Value_t<En2, on_entry2>,
+                             ... >
+\end{cppcode}
+Первый случай означает, что пользователь не задал никакого нетривиального действия.
+Второй означает, что пользователь задал одно единственное нетривиальное действие.
+И последний случай пользователь задал более одного нетривиального действия.
+В последнем случае надо сообщать об ошибке.%
+\footnote{Но я позволю себе проигнорировать этот замечательный факт.}
+А в первом надо добавить тривиальное действие.
+Для чего мы заводим вспомогательный шаблон \verb"AddTrivialAction".
+\begin{cppcode}[\nonumbers]
+template<class List>
+using AddTrivialAction = IfElse_u<TL::isEmpty<List>, Type_t<NoAction>, TL::Front_t<List>>;
+\end{cppcode}
+
+\begin{cppcode}[\nonumbers]
+using OnEntryActionList = TL::Join<TL::Map<AddTrivialAction, OnEntryActions>>;
+using OnExitActionList = TL::Join<TL::Map<AddTrivialAction, OnExitActions>>;
+\end{cppcode}
+Здесь нужен внешний \verb"Join" чтобы избавиться от списка списков.
+То есть мы переводим
+\begin{cppcode}[\nonumbers]
+OnEntryActions = TL::List<TL::List<Value_t<En1, on_entry1>>,
+                          TL::List<Value_t<En2, on_entry2>>,
+                          ... >
+\end{cppcode}
+в
+\begin{cppcode}[\nonumbers]
+OnEntryActionList = TL::List<Value_t<En1, on_entry1>,
+                             Value_t<En2, on_entry2>,
+                             ... >
+\end{cppcode}
+При этом тут количество записей такое же как в \verb"States" и каждая позиция соответствует правильному действию для данного \verb"State".
+Аналогично для \verb"OnExitActionList".
+
+\item Теперь слияние.
+\begin{cppcode}[\nonumbers]
+using type = TL::Map<TL::Join, TL::Zip<TL::Zip<OnEntryActionList, States>,
+                                       TL::Map<TL::List, OnExitActionList>>>;
+\end{cppcode}
+Давайте я поясню на примере, что тут конкретно происходит.
+Пусть у нас всего $2$ вершины и списки выглядят так:
+\begin{cppcode}[\nonumbers]
+States            = TL::List<S0, S1>
+OnEntryActionList = TL::List<Values_t<A0, on_entry0>, Value_t<A1, on_entry1>>
+OnExitActionList  = TL::List<Values_t<A0, on_exit0>,  Value_t<A1, on_exit1>>
+\end{cppcode}
+Причем длины списков у нас одинаковые и теперь мы хотим слить покомпонентно все списки.
+\begin{cppcode}[\nonumbers]
+TL::List<
+    TL::List<Values_t<A0, on_entry0>, S0, Values_t<A0, on_exit0>>,
+    TL::List<Values_t<A1, on_entry1>, S1, Values_t<A1, on_exit1>>
+>
+\end{cppcode}
+По хорошему мы хотим \verb"Zip" для трех списков.
+Я поленился его писать, а потому будем писать руками.
+Последовательность операций можно визуализировать так:
+\begin{cppcode}[\nonumbers]
+En [f0, f1] |   
+St [S0, S1] |=> [[f0, S0], [f1, S1]] |=> [[[f0, S0], [g0]], [[f1, S1], [g1]]] |=>
+Ex [g0, g1] |   [[g0], [g1]]         |
+
+=> [[f0, S0, g0], [f1, S1, g1]]
+\end{cppcode}
+В начале мы к паре \verb"[En, St]" применяем \verb"Zip", а на элементы \verb"Ex" навешиваем список.
+Потом делаем еще раз \verb"Zip" и получаем список пар.
+И теперь надо в каждой паре внутри стереть внутренние скобки, что делает поэлементное применение \verb"Join".
+\end{enumerate}
+И теперь пользовательская часть кода:
+\begin{cppcode}
+template<class TList, class States>
+struct ExtractEntryExit_t : detail::ExtractEntryExitImpl<TList, States> {};
+
+template<class TList, class States>
+using ExtractEntryExit = typename ExtractEntryExit_t<TList, States>::type;
+\end{cppcode}
+
+\subsection{BackEnd Генерация машины по таблице}
+
+
+Теперь мы подготовили все вспомогательные методы для конвертации данных в списки типов и можно строить машину состояний.
+Я начну сверху вниз.
+В начале покажу как выглядит ее интерфейс и методы снаружи, и уже потом буду добавлять имплементацию.
+
+\subsubsection{Интерфейс State Machine}
+
+Глобально код создающий машину состояний будет выглядеть так.
+Внутри служебного пространства имен заведем класс для имплементации.
+Как обычно разделенный на две части: общая версия шаблона для сигнализации об ошибках в данных и специализация для корректных данных:
+\begin{cppcode}
+namespace Implementation {
+template<class Edges, class TEnExList, class InitStates, class TFinalStates,
+         class TEvents, bool isCorrect = true>
+class SM {
+  /*error messages*/
+};
+
+template<class Edges, class TEnExList, class InitStates, class TFinalStates,
+         class TEvents>
+class SM<Edges, TEnExList, InitStates, TFinalStates, TEvents, true> {
+  /*Implementation*/
+};
+} // namespace Implementation
+\end{cppcode}
+Теперь нам нужен вспомогательный шаблон для конвертации пользовательской таблицы с описанием State Machine в данные, по которым строится имплементация:
+\begin{cppcode}
+namespace Implementation {
+template<class SmTable>
+struct SmFromTable_t {
+  using Data = Convert::ExtractTransitionData<SmTable>;
+
+  using EdgeList = Convert::EdgeList<Data>;
+  using EnExList = Convert::EnExList<Data>;
+  using States = Convert::ExtractStates<Data>;
+  using InitStates = Convert::ExtractInitialStates<Data>;
+  using FinalStates = Convert::ExtractFinalStates<Data>;
+  using Events = Convert::ExtractEvents<EdgeList>;
+  using Edges = Convert::TrimEdges<EdgeList>;
+  using EnExListT = Convert::ExtractEntryExit<EnExList, States>;
+
+  using type = SM<Edges, EnExListT, InitStates, FinalStates, Events>;
+};
+
+template<class SmTable>
+using SmFromTable = typename SmFromTable_t<SmTable>::type;
+} // namespace Implementation
+\end{cppcode}
+Здесь мы по-порядку применяем те методы, которые обсуждались в предыдущем разделе.
+\begin{cppcode}
+template<class SmTable>
+class StateMachine : public Implementation::SmFromTable<SmTable> {
+  using Base = Implementation::SmFromTable<SmTable>;
+  using Base::Base;
+};
+\end{cppcode}
+Публичное наследование от имплементации.
+При этом открываются все публичные методы, однако, конструкторы таким образом не наследуются.
+А потому тут я дополнительно пробрасываю конструкторы.
+Теперь все что нужно -- обсудить как внутри устроена имплементация для шаблона \verb"SM".
+
+\subsubsection{Имплементация по модулю визитеров}
+
+\paragraph{Интерфейс имплементации}
+
+Вот как выглядит интерфейс имплементации:
+\begin{cppcode}
+template<class TEdges, class TEnExList, class TStates, class InitStates, class TFinalStates,
+         class TEvents, bool isCorrect = /*checks*/>
+class SM {
+  /*error messages*/
+};
+
+template<class TEdges, class TEnExList, class TStates, class InitStates, class TFinalStates,
+         class TEvents>
+class SM<TEdges, TEnExList, TStates, InitStates, TFinalStates, TEvents, true> {
+public:
+  /* using declarations */
+
+  /* ctors, assignments and dtors */
+
+  template<class Event>
+  bool process(Event&& event);
+
+  template<class State>
+  bool isAt() const;
+
+  void reset();
+  bool start();
+
+  bool isComplete() const ;
+  bool isStarted() const;
+  bool isRunning() const;
+
+  template<class Event>
+  static constexpr bool acceptEvent() noexcept;
+  template<class State>
+  static constexpr bool isValidState() noexcept;
+  template<class State>
+  static constexpr bool isFinalState() noexcept;
+  template<class State>
+  static constexpr bool isInitialState() noexcept;
+  
+private:
+  /*private methods*/
+
+  AState state_ = Idle{};
+};
+\end{cppcode}
+
+\paragraph{Определение псевдонимов}
+
+Начать я хочу с определения псевдонимов в самом начале класса.
+Это нужно, чтобы подготовить всю статическую информацию для использования.
+
+В начале мы хотим изменить множество вершин \verb"TStates", потому что мы хотим добавить вспомогательные служебные состояния.
+\begin{cppcode}[\nonumbers]
+using Idle = Back::IdleState; // some empty struct
+using Initial = I<TL::Front<InitStates>>; // I<...> is a template defining an empty struct
+using FinalStates = TL::Map<F, TFinalStates>; // F<...> is a template defining an empty struct
+
+using States = TStates;
+using StatesExt = TL::PushFront<Initial, TL::Merge2<FinalStates, States>>;
+\end{cppcode}
+Мы добавили состояние \verb"Idle" для незапущенной машины, завели новое служебное начальное состояние и для каждого финального состояния завели новые финальные состояния.
+Я оставляю список исходных состояний для пользователя снаружи, а расширенный список \verb"StatesExt" будет использоваться внутри машины.
+Теперь нужно добавить ребра для служебных вершин.
+Нужно добавить одно ребро из служебной начальной вершины в настоящую начальную вершину.
+\begin{cppcode}[\nonumbers]
+using InitialEdge = TL::ConvertLike<
+    TL::List<Initial, void, NoGuard, NoAction, TL::Front<InitStates>>, TEdges>;
+\end{cppcode}
+Метод \verb"ConvertLike" нужен для того, чтобы конвертировать построенный список из \verb"TL::List" в тот вид списка, который используется в \verb"TEdges".
+И для каждой финальной вершины сделать ребро в соответствующую служебную вершину.
+\begin{cppcode}[\nonumbers]
+template<class S>
+using FinalEdge = TL::ConvertLike<TL::List<F<S>, void, NoGuard, NoAction, S>, Edges>;
+
+using FinalEdges = TL::Map<FinalEdge, TFinalStates>;
+\end{cppcode}
+И теперь все объединяем вместе:
+\begin{cppcode}[\nonumbers]
+using Edges = TL::PushFront<InitialEdge, TL::Merge2<FinalEdges, TEdges>>;
+\end{cppcode}
+Теперь надо добавить соответствующие действия на вход и выход для служебных вершин
+\begin{cppcode}[\nonumbers]
+template<class S>
+using FinalEnEx = TL::ConvertLike<TL::List<NoAction, S, NoAction>, TEdges>;
+
+using InitEnEx = FinalEnEx<Initial>;
+using FinalEnExList = TL::Map<FinalEnEx, FinalStates>;
+\end{cppcode}
+И теперь добавляем все в \verb"TEnExList" так:
+\begin{cppcode}[\nonumbers]
+using EnExListExt = TL::PushFront<InitEnEx, TL::Merge2<FinalEnExList, TEnExList>>;
+\end{cppcode}
+Теперь определим тип \verb"AState" для хранения произвольного состояния.
+У нас это будет \verb"std::variant" от всех вершин в \verb"StatesExt".
+Это делается так:
+\begin{cppcode}[\nonumbers]
+using AState = TL::Convert<StatesExt, std::variant>;
+\end{cppcode}
+И под конец заводим псевдонимы для событий.
+Так как я не завожу никаких служебных событий, то доступные события определяются просто:
+\begin{cppcode}[\nonumbers]
+using Events = TEvents;
+\end{cppcode}
+Важно отметить, что мы храним все типы состояний и событий нормализованными, то есть к ним предварительно была применена \verb"std::remove_cvref_t".%
+\footnote{В имплементации у нас вызывалось рекурентное избавление от \texttt{const/volatile} квалификаторов, и одна из проверок на корректность должна быть в том, чтобы элементы \texttt{States} и \texttt{Events} обязаны быть не ссылками.}
+
+\paragraph{Имплементация информационных методов}
+
+Начнем с имплементации статических служебных методов.
+\begin{cppcode}
+template<class Event>
+static constexpr bool acceptEvent() noexcept {
+  using PEvent = std::remove_cvref_t<Event>;
+  return TL::Contain<Events, PEvent>;
+}
+
+template<class State>
+static constexpr bool isValidState() noexcept {
+  using PState = std::remove_cvref_t<State>;
+  return TL::Contain<States, PState>;
+}
+
+template<class State>
+static constexpr bool isFinalState() noexcept {
+  using PState = std::remove_cvref_t<State>;
+  return TL::Contain<FinalStates, PState>;
+}
+
+template<class State>
+static constexpr bool isInitialState() noexcept {
+  using PState = std::remove_cvref_t<State>;
+  return areSame2<Initial, PState>;
+}
+\end{cppcode}
+Теперь обсудим простые методы сообщающие информацию о статусе машины:
+\begin{cppcode}
+bool isComplete() const {
+  return std::visit(Visitors::IsComplete<FinalStates>{}, state_);
+}
+
+bool isStarted() const {
+  return !std::holds_alternative<Idle>(state_);
+}
+
+bool isRunning() const {
+  return isStarted() && !isComplete();
+}
+\end{cppcode}
+Обратите внимание, что для метода \verb"isStarted" мы используем STL функцию.
+Ее важное условие -- тип \verb"Idle" обязан быть среди типов указанных в \verb"std::variant".
+Но у нас это условие выполняется.
+А вот для выяснения находимся ли мы в одном из финальных состояний уже придется писать своего визитора.
+Этот объект будет вынимать текущее состояние из \verb"std::variant" и уже зная что там лежит выполнять нужное действие.
+Я пока отложу вопрос имплеменатции визитеров.
+На них будет рассчитан следующий раздел, а здесь я их использую как черные ящики.
+Нужно лишь обратить внимание какую информацию визитер от меня получает.
+И мы видим, что
+\begin{cppcode}
+Visitors::IsComplete<FinalStates>{}
+\end{cppcode}
+получает только список финальных состояний и никакой run-time информации.
+Еще один метод проверки состояния:
+\begin{cppcode}
+template<class State>
+bool isAt() const {
+  using PState = std::remove_cvref_t<State>;
+  return std::visit(Visitors::IsAt<PState>{}, state_);
+}
+\end{cppcode}
+Тут просто передаем работу соответствующему визитеру.
+
+\paragraph{Запуск и остановка машины}
+
+Тут я покажу, как выглядят методы, которые переключают машину из \verb"Idle" состояния в начальное и из любого в \verb"Idle".
+\begin{cppcode}
+bool start() {
+  if constexpr (isValidState<Idle>()) {
+    forceMoveTo<Idle>();
+    processAnonymous<Idle>();
+    return true;
+  } else {
+    return false;
+  }
+}
+\end{cppcode}
+И вот тут мы видим два приватных вспомогательных метода.
+Первый перемещает машину в состояние \verb"Idle", а второй выполняет все анонимные переходы начиная из текущего состояния.
+В целом можно было бы не указывать \verb"Idle" во втором методе, но так я просто экономлю один \verb"switch", ведь я знаю, кто сейчас лежит внутри \verb"std::variant".
+
+Для остановки машины используем:
+\begin{cppcode}
+  void reset() {
+    forceMoveTo<Idle>();
+  }
+\end{cppcode}
+Предполагается, что перемещение машины из вершину в вершину насильно не вызывает действий \verb"on_exit" и \verb"on_entry".
+Однако, часто при выходе из вершины \verb"on_exit" играет роль деструктора, который чистит данные.
+А потому \verb"forceMoveTo" при выходе из текущей вершины будет вызывать \verb"on_exit" для данной вершины.
+В целом операция сброса состояния все равно может оставить данные в некорректном состоянии.
+Но что точно верно: такой метод можно использовать в служебных состояниях.
+Например сброс всегда корректно сделать из финального состояния в \verb"Idle".
+
+\paragraph{Имплементация обработчика событий}
+
+Давайте запишем, как будет выглядеть обработчик событий:
+\begin{cppcode}
+template<class Event>
+bool process(Event&& event) {
+  if (!isRunning())
+    return false;
+  using PEvent = std::remove_cvref_t<Event>;
+  if constexpr (acceptEvent<PEvent>()) {
+    if (!processOnce(std::forward<Event>(event))) {
+      return false;
+    }
+    processAnonymous();
+    return true;
+  } else {
+    return false;
+  }
+}
+\end{cppcode}
+Тут происходит проверка на то, что машина в рабочем состоянии, иначе любое сообщение игнорируется.
+После мы чистим тип сообщения от ссылок и \verb"const/volatile" модификаторов и смотрим, принимается ли это сообщение машиной.
+Если не принимается, то просто возвращаем \verb"false".
+А если принимается, то обработка идет по следующему правилу.
+\begin{enumerate}
+\item В начале мы смотрим можно ли пройти хотя бы по одному ребру с указанным типом сообщения.
+Если нельзя, то мы возвращаем \verb"false" и выходим.
+
+\item Если можно, то мы оказываемся в новом состоянии (вообще говоря) и из него мы теперь выполняем все возможные анонимные переходы.
+\end{enumerate}
+
+\paragraph{Приватные методы и их имплементации}
+
+Давайте я в начале напишу все приватные методы, которые у меня есть:
+\begin{cppcode}
+template<class Event>
+bool processOnce(Event&& event);
+
+template<class State>
+bool forceMoveTo();
+
+template<class State>
+bool processAnonymousOnce();
+bool processAnonymousOnce();
+
+template<class State>
+bool processAnonymous();
+bool processAnonymous();
+\end{cppcode}
+Все методы возвращают \verb"true", если они смогли совершить переход и \verb"false" иначе.
+Обратите внимание, что для анонимных переходов есть две версии: шаблонная и не шаблонная.
+Шаблонная нужна для случаев, когда мы уже знаем в каком состоянии какого типа находится машина, чтобы избежать лишний \verb"switch" по текущему состоянию.
+Напишем имплементации по порядку.
+Следующий метод делает один шаг вдоль ребра перехода, если найдется подходящее ребро.
+\begin{cppcode}
+template<class Event>
+bool processOnce(Event&& event) {
+  assert(isRunning());
+  using PEvent = std::remove_cvref_t<Event>;
+  return std::visit(
+             Visitors::ProcessOnce<Edges, EnExListExt, AState, PEvent>(state_, event), state_);
+}
+\end{cppcode}
+Тут я так же свожу работу к соответствующему визитеру.
+Обратите внимание, что он запоминает текущее состояние \verb"state_" в нераспакованном виде и сообщение.
+Состояние в нераспакованном виде нужно для того, чтобы его можно было поменять.
+Так же мы передаем в виде шаблонной информации все необходимые для перехода данные.
+Следующий метод для насильного перемещения машины.
+Данный метод делает только перемещение, но не выполняет последующих операций, если таковые имеются.
+\begin{cppcode}
+template<class State>
+bool forceMoveTo() {
+  static_assert(areSame2<State, std::remove_cvref_t<State>>, "Internal error!");
+  std::visit(Visitors::ForceMove<Edges, EnExListExt, AState, State>(state_), state_);
+  return true;
+}
+\end{cppcode}
+Теперь метод для выполнения одного анонимного перехода.
+\begin{cppcode}
+template<class State>
+bool processAnonymousOnce() {
+  static_assert(areSame2<State, std::remove_cvref_t<State>>, "Internal error!");
+  assert(std::get_if<State>(&state_) && "Internal error!");
+    return Visitors::AnonymousTransitOnce<Edges, EnExListExt, AState>(state_)
+        .template call<State>();
+}
+
+bool processAnonymousOnce() {
+    return std::visit(Visitors::AnonymousTransitOnce<Edges, EnExListExt, AState>(state_), state_);
+}
+\end{cppcode}
+И обработчик всех анонимных сообщений:
+\begin{cppcode}
+template<class State>
+bool processAnonymous() {
+  static_assert(areSame2<State, std::remove_cvref_t<State>>, "Internal error!");
+  if (!processAnonymousOnce<State>())
+    return false;
+  while (processAnonymousOnce()) {
+  }
+  return true;
+}
+
+bool processAnonymous() {
+  if (!processAnonymousOnce())
+    return false;
+  while (processAnonymousOnce()) {
+  }
+  return true;
+}
+\end{cppcode}
+Такой обработчик пробует сделать один шаг (шаблонная версия при этом делает его из известного состояния).
+И если получилось, то потом делаем в цикле шаги до тех пор, пока хотя бы один шаг был сделан.
+
+\subsubsection{Обеспечение семантики}
+
+На мой взгляд это настолько важный вопрос, что для него полагается отдельный раздел.
+
+\paragraph{Создание машины}
+
+Классически мы считаем, что машина создается в незапущенном состоянии \verb"Idle".
+Потому дефолтный конструктор для машины состояний можно использовать по умолчанию:
+\begin{cppcode}
+template<class TEdges, class TEnExList, class TStates, class TInitStates,
+         class TFinalStates, class TEvents>
+class SM<TEdges, TEnExList, TStates, TInitStates, TFinalStates, TEvents, true> {
+public:
+  SM() = default;
+  ...
+private:
+  AState state_ = Idle{};
+};
+\end{cppcode}
+Если при этом машина поддерживает данные внутри себя, то их так же можно сообщить в конструкторе
+\begin{cppcode}
+Data data;
+StateMachine sm(std::move(data), 1, 1.2);
+\end{cppcode}
+Тип этих данных можно вытащить из аргументов \verb"Guard"-ов и \verb"Action"-ов отличных от служебных данных вроде состояний и событий.
+И можно сделать конструктор, который зависит только от этих аргументов и поглощает внутрь себя их начальные состояния.
+Вопрос в том, а как распаковать список аргументов.
+Давайте поясню, что это значит.
+Вот у вас есть класс
+\begin{cppcode}
+template<class TEdges, class TEnExList, class TStates, class TInitStates,
+         class TFinalStates, class TEvents>
+class SM<TEdges, TEnExList, TStates, TFinalStates, TEvents, true> {
+public:
+  using DataList = /*extract from the transition table*/;
+  ...
+private:
+  AState state_ = Idle{};
+};
+\end{cppcode}
+И теперь мы знаем, что \verb"DataList" -- это список вида
+\begin{cppcode}[\nonumbers]
+DataList = TL::List<Data, int, double>;
+\end{cppcode}
+И мы хотим создать конструктор вида
+\begin{cppcode}[\nonumbers]
+SM(Data&&, int&&, double&&);
+\end{cppcode}
+Как распаковать список, когда мы знаем только его имя?
+Один из способов -- добавить список типов \verb"DataList" в число аргументов по умолчанию и специализировать его на распакованный вариант.
+\begin{cppcode}
+template<class TEdges, class TEnExList, class TStates, class TInitStates,
+         class TFinalStates, class TEvents, class DataList = ExtractData<TEdges, TEnExList>,
+         bool isCorrect = /*checkes*/>
+class SM { /*error messages*/ };
+
+template<class TEdges, class TEnExList, class TStates, class TInitStates,
+         class TFinalStates, class TEvents, template<class...> class List, class... Ts>
+class SM<TEdges, TEnExList, TStates, TFinalStates, TEvents, List<Ts...>, true> {
+public:
+  using DataList = List<Ts...>;
+  SM(Ts&&... args) : data_(MakeTuple(std::move(args)...)) {}
+  ...
+private:
+  AState state_ = Idle{};
+  Tuple<std::remove_cvref_t<Ts>...> data_;
+};
+\end{cppcode}
+В данном случае \verb"Ts&&" является rvalue ссылкой, а не универсальной ссылкой, потому что \verb"Ts" не является шаблонным аргументом для самого конструктора.
+На уровне конструктора это уже конкретный известный тип.
+При такой имплементации сложно обеспечить различные виды ссылок для каждого аргумента.
+
+Другой вариант -- сделать шаблонный конструктор и надеяться, что данные преобразуются как надо.
+\begin{cppcode}
+template<class TEdges, class TEnExList, class TStates, class TInitStates,
+         class TFinalStates, class TEvents, bool isCorrect = /*checkes*/>
+class SM { /*error messages*/ };
+
+template<class TEdges, class TEnExList, class TStates, class TInitStates,
+         class TFinalStates, class TEvents>
+class SM<TEdges, TEnExList, TStates, TFinalStates, TEvents, true> {
+public:
+  using DataList = /*extract from the transition table*/;
+  using Data = /*create Tuple from DataList*/;
+  template<class... Ts, class = std::enable_if_t<(sizeof...(Ts) == TL::Size<DataList>)>>
+  SM(Ts&&... args) : data_(std::forward<Ts>(args)...) {}
+  ...
+private:
+  AState state_ = Idle{};
+  Data data_;
+};
+\end{cppcode}
+Аналогичным приемом мы пользовались в случае имплементации \verb"Tuple" (см.~\ref{}).
+
+Так же можно делегировать вопрос хранения и создания зависимостей отдельному классу и потом использовать Polici Based Design (или Mixing-и).
+Про это я немного писал тут~\ref{}.
+Давайте кратко скажу в чем суть.
+Давайте посвятим хранению данных отельный объект:
+\begin{cppcode}
+template<class List>
+struct Storage;
+
+template<template<class...> class List, class... Ts>
+class Storage<List<Ts...>> {
+public:
+  Storage(Ts&&... args) : data_(std::move(args)...) {}
+  template<class... Args, std::enable_if_t<(sizeof...(Args) == sizeof...(Ts))>>
+  Storage(Args&&... args) : data_(std::forward<Args>(args)...) {}
+protected:
+  Tuple<std::remove_cvref_t<Ts>...> data_;
+};
+\end{cppcode}
+Тут можно выбрать какой из вариантов конструкторов вы хотите использовать: поглощающий или использующий perfect forwarding (см.~\ref{}).
+Теперь надо лишь унаследоваться от этого класса:
+\begin{cppcode}
+template<class TEdges, class TEnExList, class TStates, class TInitStates,
+         class TFinalStates, class TEvents>
+class SM<TEdges, TEnExList, TStates, TFinalStates, TEvents, true>
+    : Storage<ExtractDataList<TEdges, TEnExList>>  {
+  using Base = Storage<ExtractDataList<TEdges, TEnExList>>;
+public:
+  using Base::Base; // inherit constructors
+  ...
+};
+\end{cppcode}
+И теперь надо лишь прокинуть конструкторы с помощью \verb"using" директивы.
+Так мы отделяем вопрос хранения данных от использования данных.
+В частности можно использовать разные стратегии хранения.
+Например можно завернуть внутренний \verb"Tuple" в \verb"unique_ptr" или \verb"HeapHolder" (см.~\ref{}) и получить почти бесплатное перемещение данных.
+Либо использовать \verb"Tuple" как и написано выше, что дает хорошую локальность данных.
+
+\paragraph{Разрушение машины}
+
+Теперь надо понять, что делать для разрушения машины.
+Я не имплементировал поддержку данных в примере для State Machine, однако, машина состояний скорее всего поддерживает данные, которые то инициализируются, то освобождаются, а возможно даже удаляются при переходе между состояниями.
+В частности при входе в какое-то состояние у вам может произойти аллокация ресурса, который надо освободить при выходе.
+Это означает, что находясь в произвольной вершине, вы  вообще говоря не можете просто так воспользоваться деструктором по умолчанию.
+Тем не менее, если машина находится в \verb"Idle" состоянии или в одном из финальных состояний, то дефолтный деструктор должен сработать.
+Если же машина находится не в дефолтном состоянии, то нужно выполнить действия по выходу из вершины (что должно освбодить ресурсы захваченные при входе в вершину) и это все.
+Так что деструктор будет иметь вид:
+\begin{cppcode}
+~SM() noexcept {
+  reset();
+}
+\end{cppcode}
+где функция \verb"reset" в нашем случае подразумевает внутри \verb"forceMoveTo<Idle>", который по нашему допущению в обход принятого поведения вызывает \verb"on_exit" действие из текущей вершины.
+
+\paragraph{Перемещение}
+
+При перемещении машины
+\begin{cppcode}
+StateMachine sm0;
+StateMachine sm1 = std::move(sm0);
+StateMachine sm2;
+sm2 = std::move(sm1);
+\end{cppcode}
+нужно заботиться о том, чтобы оставить предыдущую машину в <<пустом>> состоянии.
+Машина содержит по сути два вида данных:
+\begin{enumerate}
+\item текущее состояние \verb"state_".
+
+\item текущие данные \verb"data_".
+\end{enumerate}
+И мы должны обеспокоиться о перемещении их всех.
+Нам нужно понять состояние машины, в котором она остается после перемещения.
+Обратите внимание, что \verb"std::variant" после перемещения содержит объект того же типа, но из которого мувнули данные.
+Даже если мы забудем про данные \verb"data_" и их корректность, то подобная процедура может поставить State Machine в некорректное состояние, потому что состояние могло содержать специальным образом синхронизированные данные (подчиненные некому инварианту), чего больше нет.
+На мой взгляд правильным решением будет перевести машину в исходное дефолтное состояние после работы дефолтного конструктора.
+Это значит, что надо выставить \verb"state_" в \verb"Idle{}".
+Обратите внимание, что тут я подразумеваю, что классы состояний обладают value semantics.
+Иначе могут быть всякие проблемы.
+
+Для данных \verb"data_" ситуация следующая.
+Если они уже обладают value semantics (см.~\ref{}), то данные корректно переместятся в новую машину.
+Однако, то что осталось в \verb"data_" после мува из них может не соответствовать состоянию, в котором машина ожидает данные в начале своей работы.
+Потому может понадобиться сброс данных до некоторого дефолтного состояния.
+Чтобы не было проблем проще всего дефолтное состояние считать состоянием после дефолтного конструктора, а уже содержательную инициализацию выполняет \verb"on_entry" действие.
+В любом случае если машина находится в некотором состоянии, то при входе в нее \verb"on_entry" мог захватить ресурсы и положить их в переменную для State Machine.
+Потому нам надо выполнить \verb"on_exit" действие для текущего состояния.
+Иначе могут быть проблемы.
+\begin{cppcode}
+SM(SM&& other) noexcept 
+    : state_(std::exchange(other.state_, Idle{})),
+      data_(std::exchange(other.data_, Default{})) {
+}
+SM& operator=(SM&& other) noexcept {
+  SM tmp = std::move(other);
+  std::swap(state_, tmp.state_);
+  std::swap(data_, tmp.data_);
+  return *this;
+}
+\end{cppcode}
+Здесь \verb"Default" подразумевает инициализацию каким-то дефолтным значением данных.
+Если такая реинициализация ненужна, то можно было бы использовать  \verb"std::move" вместо \verb"std::exchange", но только будьте уверены, что это действительно корректно для ваших данных.
+
+% Поместить этот текст в раздел про value semantics
+Еще один общий подход заключается в том, чтобы считать, что  машиной просто нельзя пользоваться после мува из нее.
+То есть машина как не инициализированная переменная находится в корректном но мусорном состоянии.
+Перед использованием такой переменной в ей надо вначале присвоить некоторое значение и уже потом пользоваться.
+При таком подходе надо быть аккуратным, потому что компилятор вам почти никогда не подскажет, что вы мувнули из объекта и им нельзя пользоваться.
+Самая главная проблема -- деструктор.
+Например если вы мувнули данные из \verb"std::vector"-а выполнив просто \verb"std::memcpy" для локальных данных, то старый вектор содержит все те же самые указатели на те же самые данные.
+Использование старого вектора конечно должно считаться UB, однако, как деструктор старого вектора должен понять, что ему не надо исполняться?
+Обычно он понимает это потому, что указатели равны \verb"nullptr", а в этом случае только компилятор может уследить за подобным.
+Но в случае нескольких единиц трансляции, компилятор просто может не знать, что из объекта мувнули в коде из другой единицы трансляции.
+Это все делает подобные подходы в C++ очень опасными и сложно реализуемыми.
+
+\paragraph{Можно ли копировать?}
+
+Если и классы состояний и классы для данных подчиняются value semantics, то ничто не мешает использовать дефолтные конструктор и оператор копирования, потому что и состояние машины и данные будут в корректном и одинаковом состоянии после копирования и не будут влиять друг на друга никаким образом.
+\begin{cppcode}
+SM(const SM&) = default;
+SM& operator=(const SM& other) = default;
+\end{cppcode}
+
+\subsubsection{Имплементация визитеров}
+
+Теперь перейдем к имплементации визитеров.
+Я для удобства спрячу их в общее пространство имен \verb"Visitors".
+Давайте я в начале перечислю всех визитеров, что у нас есть:
+\begin{cppcode}
+namespace Visitors {
+template<class State>
+struct IsAt;
+
+template<class FinalStates>
+struct IsComplete;
+
+template<class Edges, class StatesEnEx, class AState, class From>
+struct AnonymousTransitOnce;
+
+template<class Edges, class StatesEnEx, class AState, class Target>
+struct ForceMove;
+
+template<class Edges, class StatesEnEx, class AState, class Event>
+struct ProcessOnce;
+} // namespace Visitors 
+\end{cppcode}
+Сразу скажу, что я буду игнорировать данные в State Machine при имплементации визитеров.
+Это не принципиально, они легко добавляются в код ниже.
+Возможно я когда-нибудь допишу этот код.
+
+\paragraph{Визитер \texttt{IsAt}}
+
+Самый простой визитер для проверки состояния машины:
+\begin{cppcode}
+template<class State>
+struct IsAt {
+  static_assert(areSame2<State, std::remove_cvref_t<State>>);
+  template<class CState>
+  bool operator()(CState&) const {
+    using PState = std::remove_cvref_t<CState>;
+    return areSame2<State, PState>;
+  }
+};
+\end{cppcode}
+Прежде всего я предполагаю, что шаблонные аргументы передаются во все визитеры в нормализованном виде, то есть после применения \verb"std::remove_cvref_t".
+Однако, аргумент оператора может не удовлетворять этому условию, потому что \verb"state_" мог быть константным, так как вызвали на константном объекте.
+И потому \verb"CState" мне надо сначала почистить от возможного наличия ссылки или \verb"const/volatile" квалификаторов.
+
+\paragraph{Визитер \texttt{IsComplete}}
+
+Тут имплементация почти такая же простая, как и для шаблона \verb"IsAt":
+\begin{cppcode}
+template<class FinalStates>
+struct IsComplete {
+  template<class CState>
+  bool operator()(CState&) const {
+    using PState = std::remove_cvref_t<CState>;
+    return TL::Contains<FinalStates, PState>;
+  }
+};
+\end{cppcode}
+Так как финальных состояний много, то мы проверяем принадлежность списку \verb"FinalStates".
+Тут чистка никакая не нужна, потому что я не ожидаю тут ссылку или указатель, я ожидаю именно список типов.
+А все операции для списка типов их вначале чистят от \verb"const/volatile" квалификаторов, так что все и так должно работать, либо надо сообщать об ошибке использования.
+
+\paragraph{Визитер \texttt{AnonymousTransitOnce}}
+
+Вот как выглядит имплементация:
+\begin{cppcode}
+template<class Edges, class EnExList, class AState>
+struct AnonymousTransitOnce {
+  AnonymousTransitOnce(AState& state) : state_(state) {
+    // need to capture sm.data
+  }
+
+  template<class Source>
+  bool operator()(Source& state) const {
+    using PSource = std::remove_cvref_t<Source>;
+    return call<PSource>();
+  }
+
+  template<class From>
+  bool call() const {
+    static_assert(areSame2<From, std::remove_cvref_t<From>>);
+    return Back::TransitionFrom<AState, From, void, Edges, EnExList>(state_);
+  }
+  AState& state_;
+};
+\end{cppcode}
+Визитер перехватывает текущее состояние State Machine по неконстантной ссылке.
+Если в машине есть данные, то надо перехватить и их.
+Теперь у данного визитера кроме стандартного оператора \verb"operator()" есть еще служебный метод \verb"call".
+Суть в том, что \verb"operator()" нужен для распаковки \verb"std::visitor", а \verb"call" знает напрямую какой тип элемента внутри \verb"std::visitor".
+Этот метод нужен чтобы избежать лишнего \verb"switch" по вариантам, если снаружи мы и так знаем в каком мы сейчас состоянии (например после \verb"forceMoveTo").
+
+В этой имплементации оператор \verb"operator()" зовет метод \verb"call" после определения типа состояния.
+А вот уже оператор \verb"call" вызывает метод
+\begin{cppcode}[\nonumbers]
+Back::TransitionFrom<AState, From, void, Edges, EnExList>
+\end{cppcode}
+из BackEnd-а.
+Именно этот метод выполняет переход по одному анонимному ребру, если такой переход возможен.
+Шаблоны выше является указателем на функцию.
+Сейчас для нас эта функция является черным ящиком, но давайте поясним смысл третьего аргумента \verb"void".
+Данный аргумент должен указать тип сообщения \verb"Event".
+Но для анонимных переходов мы будем использовать \verb"void" для типа сообщения.
+Таким образом функция
+\begin{cppcode}[\nonumbers]
+Back::TransitionFrom<AState, From, Event, Edges, EnExList>
+\end{cppcode}
+умеет делать переход из состояния \verb"From" по сообщению типа \verb"Event", зная список переходов \verb"Edges" и списк действий на вход и выход для состояний \verb"EnExList".
+А в данном визитере мы просто используем частный случай этой функции.
+Обратите внимание, что визитер у меня не занимается содержательной работой, он лишь занимается распаковкой \verb"std::visitor".
+А содержательную работу как раз и выполняет шаблон \verb"TransitionFrom", которому визитер делегирует эту работу.
+
+\paragraph{Визитер \texttt{ForceMove}}
+
+Имплементация визитера:
+\begin{cppcode}
+template<class Edges, class EnExList, class AState, class Target>
+struct ForceMove {
+  static_assert(areSame2<Target, std::remove_cvref_t<Target>>);
+  ForceMove(AState& state) : state_(state) {
+  }
+
+  template<class Source>
+  bool operator()(Source&) const {
+    using PSource = std::remove_cvref_t<Source>;
+    return Back::ForceTransition<AState, PSource, Target, EnExList>(state_);
+  }
+
+  AState& state_;
+};
+\end{cppcode}
+В конструкторе мы перехватываем по ссылке нераспакованное текущее состояние.
+После распаковки мы вызываем функцию
+\begin{cppcode}[\nonumbers]
+Back::ForceTransition<AState, PSource, Target, EnExList>(state_)
+\end{cppcode}
+Пока для нас это черный ящик, но надо объяснить, что он делает и какой смысл у шаблонных аргументов.
+Данная функция выполняет насильное перемещение машины из состояния \verb"PSource" в состояние \verb"Target".
+Она предполагает, что \verb"state_" точно находится в состоянии \verb"PSource".
+Данная функция выполняет действие \verb"on_exit" для \verb"PSource" и действие \verb"on_entry" для \verb"Target".
+А потому ей нужно знать список \verb"EnExList".
+Саму функцию мы обсудим позже.
+
+\paragraph{Визитер \texttt{ProcessOnce}}
+
+И теперь обработчик одного неанонимного перехода:
+\begin{cppcode}
+template<class Edges, class EnExList, class AState, class Event>
+struct ProcessOnce {
+  static_assert(areSame2<Event, std::remove_cvref_t<Event>>);
+  ProcessOnce(AState& state, Event& event) : state_(state), event_(event) {
+  }
+
+  template<class Source>
+  bool operator()(Source&) const {
+    using PSource = std::remove_cvref_t<Source>;
+    return Back::TransitionFrom<AState, PSource, Event, Edges, EnExList>(state_, event_);
+  }
+
+  AState& state_;
+  Event& event_;
+};
+\end{cppcode}
+Этот обработчик так же перехватывает состояние \verb"state_" в нераспакованном виде, потому что он может его поменять.
+А так же он перехватывает ссылку на текущее сообщение \verb"event_".
+Внутри же после распаковки вызывается уже знакомая нам функция
+\begin{cppcode}[\nonumbers]
+Back::TransitionFrom<AState, PSource, Event, Edges, EnExList>(state_, event_);
+\end{cppcode}
+Которая просто выполняет один переход из \verb"PSource" по сообщению \verb"Event".
+Для исполнения нужно знать ребра из \verb"Edges" и действия на вход и выход из \verb"EnExList".
+
+\subsubsection{Имплементация сдвига по выбранному ребру}
+
+\paragraph{Что мы хотим}
+
+Эта функция у нас еще не возникала, но она понадобится для имплементации функций перехода.
+Данная функция будет необходима для имплементации других функций перехода.
+\begin{cppcode}[\nonumbers]
+EdgeTransition<AState, Edge, ArgList, SourceExit, TargetEntry>(state_, ...)
+\end{cppcode}
+Здесь \verb"Edge" -- ребро по которому надо осуществить переход:
+\begin{cppcode}[\nonumbers]
+Edge = TL::List<Source, Event, Guard, Action, Target>
+\end{cppcode}
+Список \verb"ArgList" -- список аргументов не содержащий \verb"Source" и \verb"Target".
+В этом списке лежат только неконстантные ссылки.
+В этом списке есть ссылка на сообщение, если ребро не анонимное и еще могут лежать ссылки на другие данные, которые используются машиной состояния.
+Последние два параметра \verb"SourceExit" и \verb"TargetEntry" -- действия для выхода из \verb"Source" и входа в \verb"Target" соответственно.
+
+\paragraph{Имплементация}
+
+Я следую своему обычному паттерну: служебный шаблон в \verb"detail" с имплементацией и распаковка для удобного доступа к \verb"value":
+\begin{cppcode}[\nonumbers]
+namespace detail {
+template<class AState, class Edge, class ArgList, class SourceExit, class TargetEntry>
+struct EdgeTransitionImpl;
+} // namespace detail
+
+template<class AState, class Edge, class ArgList, class SourceExit, class TargetEntry>
+struct EdgeTransition_t : detail::EdgeTransitionImpl<AState, Edge, ArgList,
+                                                     SourceExit, TargetEntry> {
+};
+
+template<class AState, class Edge, class ArgList, class SourceExit, class TargetEntry>
+constexpr auto EdgeTransition =
+    EdgeTransition_t<AState, Edge, ArgList, SourceExit, TargetEntry>::value;
+\end{cppcode}
+Чтобы суметь имплементировать нужную функцию нам надо распаковать \verb"ArgList".
+Это делается вызовом вспомогательного шаблона (это можно было бы сделать и без вспомогательного шаблона специализацией самого шаблона \verb"EdgeTransitionImpl", но я что-то сделал так в два шага).
+Вот как выглядит имплементация:
+\begin{cppcode}[\nonumbers]
+template<class AState, class Edge, class ArgList, class SourceExit, class TargetEntry>
+struct EdgeTransitionImpl {
+  static constexpr auto value =
+      EdgeTransitionUnPack<AState, Edge, ArgList, SourceExit, TargetEntry>::exec;
+  using value_type = std::remove_cv_t<decltype(value)>;
+};
+\end{cppcode}
+То есть класс содержит статическую \verb"constexpr" переменную \verb"value", которая является указателем на нужную функцию.
+Распаковка устроена так: общая специализация для сообщения об ошибках
+\begin{cppcode}
+template<class AState, class Edge, class ArgList, class SourceExit, class TargetEntry>
+struct EdgeTransitionUnPack {
+  static_assert(False<AState>, "Internall Error of EdgeTransition!");
+};
+\end{cppcode}
+и специализация, где происходит распаковка
+\begin{cppcode}[\nonumbers]
+template<class AState, class Edge, class... Args, template<class...> class List,
+         class SourceExit, class TargetEntry>
+struct EdgeTransitionUnPack<AState, Edge, List<Args&...>, SourceExit, TargetEntry> {
+  /* using declarations */
+  
+  /* static constants */
+  
+  static bool exec(AState& current, Args&... args) {
+    /*implementation*/
+  }
+};
+\end{cppcode}
+В начале идут вспомогательные псевдонимы, чтобы вытащить всю нужную информацию из шаблонных параметров.
+В начале вытаскиваем концы ребра перехода и тип сообщение:
+\begin{cppcode}[\nonumbers]
+using Source = EdgeOp::Source<Edge>;
+using Target = EdgeOp::Target<Edge>;
+using Event = EdgeOp::Event<Edge>;
+\end{cppcode}
+Потом достаем \verb"Guard" и \verb"Action" так:
+\begin{cppcode}[\nonumbers]
+using GuardType = EdgeOp::GuardType<Edge>;
+static constexpr auto guard = EdgeOp::Guard<Edge>;
+using ActionType = EdgeOp::ActionType<Edge>;
+static constexpr auto action = EdgeOp::Action<Edge>;
+\end{cppcode}
+Теперь вытаскиваем действия на вход и выход
+\begin{cppcode}[\nonumbers]
+static constexpr auto on_exit = SourceExit::value;
+static constexpr auto on_entry = TargetEntry::value;
+\end{cppcode}
+Напомню, что 
+\begin{cppcode}[\nonumbers]
+SourceExit  = Value_t<decltype(on_exit), on_exit>;
+TargetEntry = Value_t<decltype(on_entry), on_entry>;
+\end{cppcode}
+и функции доступны по обращению к полю \verb"value".
+Для определения корректного поведения нужно еще определить является ли перемещение внутренним (то есть не должно дергать \verb"on_exit" и \verb"on_entry" действия).
+Для этого заводим вспомогательную переменную:
+\begin{cppcode}[\nonumbers]
+static constexpr bool isInternal = EdgeOp::isInternal<Edge>;
+\end{cppcode}
+Теперь напишем имплементацию для всех случаев:
+\begin{cppcode}[\nonumbers]
+static bool exec(AState& current, Args&... args) {
+  assert(std::get_if<Source>(&current));
+  Source& source = *std::get_if<Source>(&current);
+  if (!Fun::auto_call(guard, source, args...))
+    return false;
+  if constexpr (!isInternal) {
+    Target target;
+    Fun::auto_call(on_exit, source, args...);
+    Fun::auto_call(action, source, target, args...);
+    Fun::auto_call(on_entry, target, args...);
+    current = std::move(target);
+  } else {
+    Fun::auto_call(action, source, args...);
+  }
+  return true;
+}
+\end{cppcode}
+В начале независимо от имплементации мы заводим ссылку на распакованный \verb"Source".
+Его мы вынимаем из \verb"current" (это куда подставляется \verb"state_".
+После мы проверяем условие на \verb"guard".
+\begin{cppcode}[\nonumbers]
+if (!Fun::auto_call(guard, source, args...))
+  return false;
+\end{cppcode}
+Здесь мы используем шаблон \verb"auto_call", который обсуждался в разделе~\ref{}.
+Дело в том, что в этом месте мы переходим к вызову пользовательской функции \verb"guard".
+Но мы не знаем в каком порядке и какие аргументы указывал пользователь.
+Потому нам нужна автоматическая диспетчеризация всех аргументов, которую и решает \verb"auto_call".
+Если мы используем данные из State Machine, которые запакованы в \verb"Tuple", то надо еще дополнительно добавить распаковку элементов \verb"Tuple" в отдельные аргументы.
+То есть логически данный вызов эквивалентен:
+\begin{cppcode}[\nonumbers]
+if (!guard(source, args...))
+  return false;
+\end{cppcode}
+Но только с правильным порядком аргументов (с выкинутыми ненужными).
+Если \verb"guard" не сработал, то мы тут же выходим с сообщением \verb"false".
+А дальнейшее поведение зависит от того какой у нас вид перехода:
+\begin{enumerate}
+\item Первый случай -- не внутренний переход.
+Тут надо сделать все необходимые шаги.
+\begin{enumerate}
+\item Создать новое состояние
+\begin{cppcode}[\nonumbers]
+Target target;
+\end{cppcode}
+
+\item Выполнить действия на выход для текущего состояния.
+Здесь так же нужна диспетчеризация:
+\begin{cppcode}[\nonumbers]
+Fun::auto_call(on_exit, source, args...);
+\end{cppcode}
+
+\item Выполнить действие перехода
+\begin{cppcode}[\nonumbers]
+Fun::auto_call(action, source, target, args...);
+\end{cppcode}
+
+\item Выполнить действия на вход в новое состояние
+\begin{cppcode}[\nonumbers]
+Fun::auto_call(on_entry, target, args...);
+\end{cppcode}
+
+\item Заменить старое состояние на новое
+\begin{cppcode}[\nonumbers]
+ current = std::move(target);
+\end{cppcode}
+и вернуть \verb"true", так как переход произошел.
+\end{enumerate}
+
+\item Второй случай -- внутренний переход, который не активирует действия на вход и выход.
+А потому у нас выполняется только \verb"action":
+\begin{cppcode}[\nonumbers]
+Fun::auto_call(action, source, args...);
+\end{cppcode}
+и возвращаем \verb"true".
+\end{enumerate}
+
+\subsubsection{Имплементация сдвига по неизвестному ребру}
+
+\paragraph{Что мы хотим}
+
+Теперь надо имплементировать функцию:
+\begin{cppcode}[\nonumbers]
+Back::TransitionFrom<AState, Source, Event, Edges, EnExList>(state_, event_, ...);
+\end{cppcode}
+В начале несколько замечаний о работе функции.
+Функция предполагает, что внутри \verb"state_" находится состояние \verb"Source".
+Переменная \verb"event" имеет тип \verb"Event".
+Список \verb"Edges" содержит все возможные ребра, а данная функция выбирает все ребра из него, которые начинаются с \verb"Source" и имеют сообщение типа \verb"Event".
+После чего перебором по всем ребрам проверяется \verb"Guard".
+И производится переход на первый сработавший \verb"Guard".
+Дополнительные аргументы в \verb"..." означают возможное наличие дополнительных данных, которые лежат в State Machine.
+Если внутри машины состояний данные лежат в \verb"Tuple" с именем \verb"data_", то вызов в общем случае будет
+\begin{cppcode}[\nonumbers]
+Back::TransitionFrom<AState, Source, Event, Edges, EnExList>(state_, event_, data_);
+\end{cppcode}
+и уже эта функция должна распаковать \verb"data_" и подставить что куда надо автоматически.
+В текущей имплементации я буду просто игнорировать дополнительные аргументы, но код будет написан так, что его легко будет расширить до большего списка аргументов.
+Эта функция всегда принимает нераспакованное \verb"state" в качестве первого аргумента.
+Порядок остальных аргументов определяется автоматически.
+Все аргументы передаются по неконстантной ссылке.
+
+\paragraph{Имплементация}
+
+Имплементация опять делается в два шага: служебный шаблон с имплемнтацией и удобный шаблон для обращения к функции:
+\begin{cppcode}
+namespace detail {
+template<class AState, class Source, class Event, class Edges, class AStatesEnEx>
+struct TransitionFromImpl;
+} // namespace detail
+
+template<class AState, class Source, class Event, class Edges, class StatesEnEx>
+constexpr auto TransitionFrom =
+    detail::TransitionFromImpl<AState, Source, Event, Edges, StatesEnEx>::value;
+\end{cppcode}
+Сама имплементация устроена так:
+\begin{cppcode}
+template<class AState, class Source, class Event, class Edges, class StatesEnEx>
+struct TransitionFromImpl {
+  using EdgesOut = EdgesFromBy<Edges, Source, Event>;
+  using States = TL::NoDuplicates<
+      TL::PushFront1<Source, ExtractStates<EdgesOut, TL::EmptyLike<EdgesOut>>>>;
+
+  using EnExFromList =
+      TL::Filter<StateOp::Bind<States>::template Contains_t, StatesEnEx>;
+
+  using Args = ExtractAllArgs<EdgesOut, EnExFromList>;
+  using Refs = MakeNonConstLRef<Args>;
+  using RefsNoStates = TL::Diff<Refs, MakeNonConstLRef<States>>;
+  static constexpr bool isAnonymous = areSame2<Event, void>;
+
+  using ArgList = IfElse_u<isAnonymous, Type_t<RefsNoStates>,
+                           TL::NoDuplicates_w<TL::PushFront1_w<
+                               std::add_lvalue_reference<Event>, Type_t<RefsNoStates>>>>;
+  static constexpr auto value =
+      TransitionFromUnPack<AState, Source, ArgList, EdgesOut, EnExFromList>::exec;
+  using value_type = std::remove_cv_t<decltype(value)>;
+};
+\end{cppcode}
+Давайте пройдемся по имплементации:
+\begin{enumerate}
+\item Начнем с главного в самом конце:
+\begin{cppcode}[\nonumbers]
+static constexpr auto value =
+    TransitionFromUnPack<AState, Source, ArgList, EdgesOut, EnExFromList>::exec;
+using value_type = std::remove_cv_t<decltype(value)>;
+\end{cppcode}
+Мы берем функцию \verb"exec" из вспомогательного шаблона, который просто распаковывает \verb"ArgList".
+И еще запоминаем ее тип в \verb"value_type".
+Но перед вызовом этого шаблона мы должны сделать подготовительную работу: надо найти какие аргументы понадобятся внутри при переходе по каждому ребру, которое исходит из \verb"Source".
+Для этого и нужны псевдонимы.
+
+\item В начале отбираем все ребра выходящие в точности из \verb"Source" и имеющие тип сообщения \verb"Event".
+Я это делаю с помощью вспомогательного шаблона, который еще не обсуждался (его имплементация будет ниже):
+\begin{cppcode}[\nonumbers]
+using EdgesOut = EdgesFromBy<Edges, Source, Event>;
+\end{cppcode}
+
+\item Потом достаем все вершины, которые затронуты ребрами из \verb"EngesOut" (сюда входит \verb"Source" и все \verb"Target" по всем ребрам).
+\begin{cppcode}[\nonumbers]
+using States = TL::NoDuplicates<
+    TL::PushFront1<Source, ExtractStates<EdgesOut, TL::EmptyLike<EdgesOut>>>>;
+\end{cppcode}
+Здесь надо быть аккуратным.
+Так как если множество ребер пусто, то мы извлекаем пустое множество вершин.
+В частности \verb"Source" надо в этом случае добавить искусственно и потом убрать дубликаты.
+
+\item Теперь надо оставить только те записи \verb"EnExList", в которых вершины из списка \verb"States".
+\begin{cppcode}[\nonumbers]
+using EnExFromList =
+    TL::Filter<StateOp::Bind<States>::template Contains_t, StatesEnEx>;
+\end{cppcode} 
+
+\item Теперь надо вычленить все возможные аргументы из всех возможных действий, которые у нас могут произойти.
+То есть надо взять все \verb"guard"-ы, \verb"action"-ы, \verb"on_exit" для \verb"Source" и \verb"on_entry" для каждого \verb"Target" и из сигнатуры всех этих функций выбрать типы всех аргументов.
+Я это делаю отдельным шаблоном, который определю позже
+\begin{cppcode}[\nonumbers]
+using Args = ExtractAllArgs<EdgesOut, EnExFromList>;
+\end{cppcode} 
+
+\item Сейчас аргументы могут быть разного вида.
+Для каждого типа \verb"T" аргумент может встретиться как \verb"T" или \verb"T&" или \verb"const T&" или \verb"const T".
+Я заменяю все аргументы на неконстантную ссылку:
+\begin{cppcode}[\nonumbers]
+using Refs = MakeNonConstLRef<Args>;
+\end{cppcode}
+Это разумно, потому что в самом верху стека вызова у меня в качестве аргументов будут выступать именно lvalue.
+Это либо \verb"state_", либо созданная вершина \verb"target", либо \verb"event" являющийся аргументом функции \verb"process", либо данные \verb"data_", которые лежат внутри машины состояний.
+
+\item После чего я удаляю все состояния из общего списка аргументов.
+Это связано с тем, чтобы избежать дублирование типов, если \verb"Source" и \verb"Target" одно и то же.
+Кроме того, \verb"Source" всегда вычленяется из \verb"AState".
+Так что с состояниями я буду разбираться отдельно.
+\begin{cppcode}[\nonumbers]
+using RefsNoStates = TL::Diff<Refs, MakeNonConstLRef<States>>;
+\end{cppcode}
+Так как в \verb"Refs" в находятся неконстантные ссылки без повторений, то надо просто вычесть список ссылок на состояния.
+
+\item  Теперь мне надо понять нужно ли передавать \verb"event" как аргумент или нет.
+Это проверяется флагом:
+\begin{cppcode}[\nonumbers]
+static constexpr bool isAnonymous = areSame2<Event, void>;
+\end{cppcode} 
+Без него у меня будет \verb"void&" добавлен в \verb"ArgList", что конечно же будет ошибка компиляции.
+
+\item Теперь добавим ко всем аргументам \verb"Event&", если у нас не анонимный переход и избавимся от дубликатов:
+\begin{cppcode}[\nonumbers]
+using ArgList =
+    IfElse_u<isAnonymous, Type_t<RefsNoStates>,
+             TL::NoDuplicates_w<TL::PushFront1_w<
+                 std::add_lvalue_reference<Event>, Type_t<RefsNoStates>>>>;
+\end{cppcode}
+Мне приходится тут производить вычисления внутри \verb"IfElse" не распаковывая типы, иначе было бы сообщение об ошибке.
+Более подробно, я бы мог написать так:
+\begin{cppcode}[\nonumbers]
+using ArgList =
+    IfElse<isAnonymous,
+           RefsNoStates,
+           TL::NoDuplicates<TL::PushFront1<std::add_lvalue_reference_t<Event>,
+                                           RefsNoStates>>>;
+\end{cppcode}
+Компилятор в этом случае должен вычислить все аргументы.
+В частности он должен вычислить 
+\begin{cppcode}[\nonumbers]
+std::add_lvalue_reference_t<Event>
+\end{cppcode}
+Но тогда бы в случае анонимного сообщения \verb"Event" было бы \verb"void", то компилятор бы вычислял
+\begin{cppcode}[\nonumbers]
+std::add_lvalue_reference_t<void>
+\end{cppcode}
+что привело бы к ошибке компиляции.
+Для того, чтобы избежать этой проблемы, надо запрятать результат вычислений внутрь другого шаблона каковым как раз является
+\begin{cppcode}[\nonumbers]
+std::add_lvalue_reference<void>
+\end{cppcode}
+И вот это не приведет к ошибке компиляции.
+Но тогда снаружи надо использовать операции над запакованным типом, которые у меня обозначающся с суффиксом \verb"_w".
+А распаковка делается с помощью \verb"_u" версии (как раз в \verb"IfElse" этот суффикс).
+\end{enumerate}
+Теперь надо распаковать \verb"ArgList", что делается вспомогательным шаблоном.
+Для экономии времени и места, я напишу лишь содержательную часть, без пробверки ошибок:
+\begin{cppcode}
+template<class AState, class Source, template<class...> class TList,
+         class... Args, class EdgesOut, class EnExList>
+struct TransitionFromUnPack<AState, Source, TList<Args&...>, EdgesOut,
+                            EnExList> {
+  /* using declarations to define FList */
+
+  static bool exec(AState& current, Args&... args) {
+    return Fun::cascade_call<FList>(current, args...) != -1;
+  }
+};
+\end{cppcode}
+Я специально скрыл вспомогательные шаблоны, чтобы лучше было видно, что тут происходит.
+Функция \verb"exec", которая должна выполнить переход по ребру из списка, вызывает \verb"cascade_call" (см.~\ref{}).
+Эта функция принимает список функций \verb"FList" для исполнения выполняет функции строго по списку, подставляя в них переданные аргументы (данная версия без диспетчеризации).
+Как только получен ответ \verb"true", функция \verb"cascade_call" завершает исполнение и возвращает номер элемента в списке, который выдал \verb"true".
+Если никто не выдал \verb"true", то возвращается значение $-1$.
+Так как \verb"exec" должна вернуть флаг был ли переход, то мы просто сравниваем с $-1$ на неравенство.
+Теперь нам надо построить список \verb"FList", в котором лежат функции, выполняющие переход вдоль одного ребра, для всех ребер из \verb"EdgesOut".
+Построением такого списка и занимаются \verb"using" директивы в начале класса.
+В этом месте нам понадобится шаблон шаблон \verb"EdgeTransition" разобранный в предыдущем разделе.
+
+Давайте посмотрим как работает построение нужного списка действий:
+\begin{enumerate}
+\item В начале я завожу псевдоним для списка переданных аргументов
+\begin{cppcode}[\nonumbers]
+using ArgList = TList<Args&...>;
+\end{cppcode}
+Просто для удобства.
+
+\item Я хочу для каждого ребра взять его начало и у начала взять 
+
+\item Теперь вытаскиваем все записи из \verb"EnExList", в которых встречается \verb"Source" ребра.
+\begin{cppcode}[\nonumbers]
+using EdgeSourceEnExList =
+    TL::Filter<StateOp::Bind<Source>::template isSame_t, EnExList>;
+\end{cppcode}
+Получим список из в точности $1$ элемента.
+
+\item Теперь вытаскиваем \verb"on_exit" для \verb"Source":
+\begin{cppcode}[\nonumbers]
+using SourceExit = StateOp::OnExitW<TL::Front<EdgeSourceEnExList>>;
+\end{cppcode}
+
+\item Концы у ребер уже все различные.
+Потому для каждого ребра надо найти свою запись в \verb"EnExList" и вытащить его \verb"on_entry" действие.
+Потому далее я все операции делаю зависимыми от ребра.
+
+\item Вот такая процедура вытаскивает для каждого ребра список из одной записи:
+\begin{cppcode}[\nonumbers]
+template<class Edge>
+using EdgeTargetEnExList =
+    TL::Filter<StateOp::Bind<EdgeOp::Target<Edge>>::template isSame_t, EnExList>;
+\end{cppcode}
+Тут надо сказать, что \verb"EdgeOp::Target" должна не просто брать $4$-ый элемент, а она проверяет, если $4$-ый элемент \verb"void", то она берет \verb"Source", иначе $4$-ый элемент ребра.
+
+\item Вот такая процедура из полученного списка берет единственный элемент и извлекает \verb"on_entry" действие.
+\begin{cppcode}[\nonumbers]
+template<class Edge>
+using TargetEntry = StateOp::OnEntryW<TL::Front<EdgeTargetEnExList<Edge>>>;
+\end{cppcode}
+
+\item Теперь вспомогательный шаблон, который для каждого ребра строит функцию перехода по этому ребру.
+А мы уже обсуждали в точности эту задачу.
+Для ее решения используется шаблон \verb"EdgeTransition_t", куда мы подставляем нужные данные:
+\begin{cppcode}[\nonumbers]
+template<class Edge>
+using EdgeTransitionT = EdgeTransition_t<AState, Edge, ArgList,
+                                         SourceExit, TargetEntry<Edge>>;
+\end{cppcode}
+
+\item Выше у нас получился список из типов, в которые завернуты функции.
+Теперь надо из списка типов сделать список функций перекодированием:
+\begin{cppcode}[\nonumbers]
+using FList = AL::FromTList<FListT>;
+\end{cppcode}
+И на этом подготовка к вызову закончена.
+\end{enumerate}
+
+\subsubsection{Имплементация насильного перемещения}
+
+Теперь надо имплементировать функцию
+\begin{cppcode}[\nonumbers]
+Back::ForceTransition<AState, Source, Target, EnExList>(state_, ...);
+\end{cppcode}
+Эта функция считает что \verb"state_" находится в состоянии \verb"Source".
+Она не проверяет это условие.
+Обязательные аргументы -- \verb"state_" для нераспакованного \verb"Source".
+Дополнительные аргументы отмеченные \verb"..." могут отвечать за данные State Machine, которые указаны в аргументах действий \verb"on_exit" для \verb"Source" и \verb"on_entry" для \verb"Target".
+
+\paragraph{Имплементация}
+
+Имлементация опять делается в два шага: служебный шаблон с имплементацией и удобный шаблон для обращения к функции:
+\begin{cppcode}
+namespace detail {
+template<class AState, class Source, class Target, class EnExList>
+struct ForceTransitionImpl;
+} // namespace detail
+
+template<class AState, class Source, class Target, class EnExList>
+constexpr auto ForceTransition =
+    detail::ForceTransitionImpl<AState, Source, Target, EnExList>::value;
+
+\end{cppcode}
+Сама имплементация выглядит так:
+\begin{cppcode}
+
+template<class AState, class Source, class Target, class EnExList>
+struct ForceTransitionImpl {
+  /* using declarations */
+  /* define SourceNode, TargetNode, RefsNoStates */
+
+  static constexpr auto value =
+      ForceTransitionUnPack<AState, Source, Target, SourceNode, TargetNode,
+                            RefsNoStates>::exec;
+
+  using value_type = std::remove_cv_t<decltype(value)>;
+};
+\end{cppcode}
+В начале шаблона строятся три вспомогательных класса:
+\begin{enumerate}
+\item \verb"SourceNode" -- содержит \verb"on_entry" и \verb"on_exit" методы для \verb"Source".
+
+\item \verb"TargetNode" -- содержит \verb"on_entry" и \verb"on_exit" методы для \verb"Target".
+
+\item \verb"RefsNoStates" -- список аргументов для \verb"exec" исключающий состояния \verb"Source" и \verb"Target".
+\end{enumerate}
+Давайте напишем, как происходят эти вычисления:
+\begin{enumerate}
+\item В начале надо вытащить единственную запись для вершины \verb"Source":
+\begin{cppcode}[\nonumbers]
+using SourceNode =
+    TL::Front<TL::Filter<StateOp::Bind<Source>::template isSame_t, EnExList>>;
+\end{cppcode}
+
+\item Аналогично для вершины \verb"Target":
+\begin{cppcode}[\nonumbers]
+using TargetNode =
+    TL::Front<TL::Filter<StateOp::Bind<Target>::template isSame_t, EnExList>>;
+\end{cppcode}
+
+\item  Теперь извлекаем из вершины для \verb"Source" тип действия \verb"on_exit" и из него берем аргументы с помощью шаблона \verb"ArgsOf", который мы разбирали в разделе~\ref{section::ArgsOf}.
+Аналогично поступаем с вершиной \verb"Target", но берем \verb"on_entry" действие.
+А потом оба списка аргументов сливаем в один и убираем дубликаты.
+\begin{cppcode}[\nonumbers]
+using ExitArgs = Fun::ArgsOf<StateOp::OnExitType<SourceNode>>;
+using EntryArgs = Fun::ArgsOf<StateOp::OnEntryType<TargetNode>>;
+using Args = TL::NoDuplicates<TL::Merge2<ExitArgs, EntryArgs>>;
+\end{cppcode}
+
+\item Теперь трансформируем все аргументы в неконстантные ссылки (эта функция еще и убирает дубликаты):
+\begin{cppcode}[\nonumbers]
+using Refs = MakeNonConstLRef<Args>;
+\end{cppcode}
+
+\item И теперь удаляем ссылки на \verb"Source" и \verb"Target".
+\begin{cppcode}[\nonumbers]
+using RefsNoStates = TL::Diff<Refs, TL::List<Source&, Target&>>;
+\end{cppcode}
+\end{enumerate}
+Теперь напишем как выглядит шаблон с распаковкой \verb"RefsNoStates" определяющий \verb"exec".
+Я сразу перейду к содержательной специализации.
+\begin{cppcode}
+template<class AState, class Source, class Target, class SourceNode,
+         class TargetNode, class... Args, template<class...> class List>
+struct ForceTransitionUnPack<AState, Source, Target, SourceNode, TargetNode,
+                             List<Args&...>> {
+  static constexpr auto on_exit = StateOp::OnExit<SourceNode>;
+  static constexpr auto on_entry = StateOp::OnEntry<TargetNode>;
+
+  static bool exec(AState& current, Args&... args) {
+    assert(std::get_if<Source>(&current));
+    Source& source = *std::get_if<Source>(&current);
+    Target target;
+    Fun::auto_call(on_exit, source, args...);
+    Fun::auto_call(on_entry, target, args...);
+    current = std::move(target);
+    return true;
+  }
+};
+\end{cppcode}
+Тут все прямолинейно.
+Мы в начале вынимаем сами действия \verb"on_exit" и \verb"on_entry" из шаблонных параметров.
+А в самом методе создаем новое состояние, потом выход из \verb"source", вход в \verb"target" и делаем подмену внутри \verb"std::variant".
+Тут наверное можно было бы рассмотреть случай, когда \verb"Source" и \verb"Target" одно и то же и избежать создания нового состояния \verb"target".
+Но если после работы \verb"on_exit" состояние совпадает с состоянием после дефолтного конструктора, то это не требуется.
+Но чтобы было наверняка, мы просто заводим новое состояние с дефолтным значением и все.
+
+
+\subsubsection{Вспомогательные методы}
+
+Давайте я для полноты картины опишу некоторые вспомогательные шаблоны, которые были использованы выше.
+
+\paragraph{Отсеивание ребер}
+
+Напомню, что задача заключается в следующем.
+Есть список ребер
+\begin{cppcode}[\nonumbers]
+using Edges = TL::List<Edge1, Edge2, ...>;
+\end{cppcode}
+Теперь есть три задачи:
+\begin{enumerate}
+\item Отобрать только те ребра, что ведут из вершины \verb"State".
+
+\item Отобрать только те ребра, что реагируют на сообщения типа \verb"Event".
+
+\item Отобрать ребра удовлетворяющие обоим условиям.
+\end{enumerate}
+Понятно, что тут надо просто использовать \verb"TL::Filter" с нужным предикатом.
+Вот как выглядит имплементация отборки по \verb"Source":
+\begin{cppcode}[\nonumbers]
+namespace detail {
+template<class TList, class State, bool isCorrect = isEdgeList<TList>>
+struct EdgesFromImpl {
+  static_assert(isEdgeList<TList>, "The first argument of EdgesFrom MUST be an edge list!");
+};
+
+template<class TList, class State>
+struct EdgesFromImpl<TList, State, true> {
+  using type = TL::Filter<EdgeOp::Bind<State>::template isSourceSame_t, TList>;
+};
+} // namespace detail
+
+template<class TList, class State>
+struct EdgesFrom_t : detail::EdgesFromImpl<std::remove_cv_t<TList>,
+                                           std::remove_cvref_t<State>> {};
+
+template<class TList, class State>
+using EdgesFrom = typename EdgesFrom_t<TList, State>::type;
+\end{cppcode}
+Абсолютно аналогично имплементируется отборка по сообщению:
+\begin{cppcode}[\nonumbers]
+namespace detail {
+template<class TList, class Event, bool isCorrect = isEdgeList<TList>>
+struct EdgesByImpl {
+  static_assert(isEdgeList<TList>, "The first argument of EdgesBy MUST be an edge list!");
+};
+
+template<class TList, class Event>
+struct EdgesByImpl<TList, Event, true> {
+  using type = TL::Filter<EdgeOp::Bind<Event>::template isEventSame_t, TList>;
+};
+} // namespace detail
+
+template<class TList, class Event>
+struct EdgesBy_t
+    : detail::EdgesByImpl<std::remove_cv_t<TList>, std::remove_cvref_t<Event>> {
+};
+
+template<class TList, class Event>
+using EdgesBy = typename EdgesBy_t<TList, Event>::type;
+\end{cppcode}
+И теперь можно сразу имплементировать последний метод как композицию предыдущих двух даже без функции имплементации.%
+\footnote{По хорошему все равно надо бы сделать имплементацию, чтобы сообщать об ошибках относительно имени этой функции.
+Сейчас же пользователь увидит ошибки от функций \texttt{EdgesFrom} и \texttt{EdgesBy} и будет сложно понять, что это именно функция \texttt{EdgesFromBy}.
+Но я как обычно ленюсь.}
+\begin{cppcode}[\nonumbers]
+template<class TList, class State, class Event>
+struct EdgesFromBy_t : EdgesBy_t<EdgesFrom<TList, State>, Event> {};
+
+template<class TList, class State, class Event>
+using EdgesFromBy = typename EdgesFromBy_t<TList, State, Event>::type;
+\end{cppcode}
+
+\paragraph{Вычленение зависимостей}
+
+Напомню, что вся машина состояний задается двумя списками:
+\begin{cppcode}[\nonumbers]
+using Edges = TL::List<Edge1, Edge2, ...>;
+using EnExList = TL::List<Node1, Node2, ...>;
+\end{cppcode}
+Первые содержат \verb"Guard" и \verb"Action", а вторые \verb"OnExit" и \verb"OnEntry" действия.
+Все их аргументы являются зависимостями, которые надо автоматически подтягивать.
+Мы просто вытянем списки типов для всех этих действий, на	йдем их аргументы и сольем все списки вместе.
+Потом уберем все повторения.
+Вот так выглядит имплементация:%
+\footnote{Да, я опять забил на проверку ошибок.}
+\begin{cppcode}[\nonumbers]
+template<class Edges, class StatesEnEx>
+struct ExtractAllArgs_t {
+  using GuardTypeList = ExtractGuardTypes<Edges>;
+  using ActionTypeList = ExtractActionTypes<Edges>;
+  using OnEntryTypeList = ExtractOnEntryTypes<StatesEnEx>;
+  using OnExitTypeList = ExtractOnExitTypes<StatesEnEx>;
+  using FList = TL::Merge<GuardTypeList, ActionTypeList, OnEntryTypeList, OnExitTypeList>;
+  using type = detail::ExtractArgs<FList>;
+};
+\end{cppcode}
+Я не буду определять все четыре функции вычленения типов для действий.
+Обойдусь первой.
+\begin{cppcode}[\nonumbers]
+template<class Edges>
+struct ExtractGuardTypes_t
+    : TL::NoDuplicates_t<TL::Map<EdgeOp::GuardType, Edges>> {};
+
+template<class Edges>
+using ExtractGuardTypes = typename ExtractGuardTypes_t<Edges>::type;
+\end{cppcode}
+Аналогично пишутся остальные методы, учитывая, что у нас есть уже все вспомогательные методы.
+Теперь метод по вычленению аргументов из списка сигнатур функций:
+\begin{cppcode}[\nonumbers]
+template<class FList>
+struct ExtractArgs_t : NoDuplicates_t<TL::Join<TL::Map<Fun::ArgsOf, FList>>> {
+};
+
+template<class FList>
+using ExtractArgs = typename ExtractArgs_t<FList>::type;
+\end{cppcode}
+Тут надо сказать про метод \verb"TL::Join", который я не обсуждал.
+Этот метод ожидает, что на вход ему подают список списков:
+\begin{cppcode}[\nonumbers]
+using List1 = List<List<A, B, C>, List<>, List<D, E>>;
+\end{cppcode}
+И он сливает их в один большой список.
+\begin{cppcode}[\nonumbers]
+using List2 = TL::Join<List1>;
+// List2 = List<A, B, C, D, E>;
+\end{cppcode}
+Я надеюсь, что этот метод вы тоже догадаетесь как имплементировать.
+Он как минимум сводится к \verb"TL::Merge".
+
+\paragraph{Нормализация типов}
+
+Этот метод пишется максимально в лоб.
+Сначала снимаем со всех аргументов ссылки и \verb"const/volatile" квалификаторы, а потом надеваем lvalue ссылки и убираем дубликаты.
+Я опять поленился с проверкой.
+\begin{cppcode}[\nonumbers]
+template<class TList>
+struct MakeNonConstLRef_t {
+  using NoCVRefList = TL::Map<std::remove_cvref_t, TList>;
+  using RefList = TL::Map<std::add_lvalue_reference_t, NoCVRefList>;
+  using type = TL::NoDuplicates<RefList>;
+};
+
+template<class TList>
+using MakeNonConstLRef = typename MakeNonConstLRef_t<TList>::type;
+\end{cppcode}
+
+\subsection{Проверка таблицы на корректность}
+
+Так как наша машина состояний задается полностью во время компиляции, то мы можем сделать почти все проверки корректности ее построения во время компиляции.
+При этом мы уже сделали некоторые проверки на уровне FrontEnd-а, когда сообщали пользователю о недопустимых операциях.
+Однако, на уровне FrontEnd-а не хочется делать более серьезные проверки не относящиеся к DSL.
+С другой стороны при построении машины состояний мы уже хотим иметь корректные данные.
+Давайте вспомним какие данные принимает машина состояний после конвертации данных из FrontEnd-а:
+\begin{cppcode}[\nonumbers]
+template<class Edges, class EnExList, class States, class InitStates,
+         class FinalStates, class Events, bool isCorrect = /*checks*/>
+class SM {
+  /* Implementation */
+};
+\end{cppcode}
+Теперь я хочу перечислить условия, которые у нас точно гарантируются методами конвертации:
+\begin{enumerate}
+\item Корректность \verb"States".
+Гарантируется, что список всех состояний встречающихся в \verb"Edges" и \verb"EnExList" совпадает со \verb"States".
+Кроме того, все типы в этом списке не ссылки и без \verb"const/volatile" квалификаторов.
+
+\item Корректность \verb"Events".
+Это значит, что список всех типов сообщений, которые встречаются в \verb"Edges", в точности совпадает с \verb"Events".
+Кроме того, все типы в этом списке не ссылки и без \verb"const/volatile" квалификаторов.
+
+\item Список \verb"EnExList" содержит в точности по одной записи для каждого состояния \verb"States".
+Вот эту проверку можно было бы убрать из конвертирующего кода.
+Она подразумевается в момент слияния вершин списка для одного и того же состояния (см.~\ref{section::SMFrontToBackConvert}).
+
+\item Так же мы гарантируем, что \verb"InitialStates" и \verb"FinalStates" является подмножествами в \verb"States".
+\end{enumerate}
+Что мы хотим и можем проверить во время компиляции:
+\begin{enumerate}
+\item Список \verb"InitialStates" содержит в точности одну вершину.
+
+\item Список \verb"InitialStates" и \verb"FinalStates" не пересекаются.
+
+\item Списки \verb"States", \verb"Events" не пересекаются.
+
+\item Для каждого состояния \verb"S" из списка \verb"States" либо есть только одно анонимное ребро ведущее из него, либо  у всех анонимных ребер нетривиальные \verb"Guard"-ы.
+Это не дает полных гарантий, поскольку сравнивать \verb"Guard"-ы мы можем только по указателям на функции и пользователь мог задать что-то плохое, что можно отловить только в run-time.
+Но как минимум условия выше проверяются во время компиляции.
+
+\item Если в графе переходов оставить только анонимные ребра, то в полученном графе нет петель.
+Это необходимо, потому что переход по анонимным ребрам выполняется автоматически и наличие таких петель автоматически уведет машину в бесконечный цикл.
+\end{enumerate}
+Условия которые мы не можем проверить во время компиляции.
+\begin{enumerate}
+\item По-хорошему для машины состояний требуется, чтобы для всех ребер выходящих из фиксированной вершины не возможно одновременное срабатывание двух \verb"Guard"-ов, то есть все переходы взаимоисключающие.
+Такое просто так отследить не получится, особенно если у вас состояния и сообщения содержат run-time информацию.
+Но если очень хочется, то можно поставить \verb"assert"-ы на это условие.
+Это потребует переработки имплементации методов перехода по ребрам, но это не сложно.
+\end{enumerate}
+Я не буду писать тривиальные проверки, а напишу только две интересные.
+
+\subsubsection{Корректность анонимных ребер}
+
+В начале надо проверить условие для отдельной вершины \verb"S", что если из нее выходит более одного анонимного ребра, то у них у всех нетривиальные гарды.
+Как обычно двухшаговая имплементация.
+В начале сообщения об ошибках в общем шаблоне:%
+\footnote{Тут я использую функцию для проверки, что нам действительно дан список ребер.
+Ее я обсужу ниже.}
+\begin{cppcode}[\nonumbers]
+template<class Edges, class F, bool isCorrect = isEdgeList<Edges>>
+struct areAnonymousValidAtImpl {
+  static_assert(isEdgeList<Edges>,
+                "The first argument of areAnonymousValidAt MUST be a list of edges!");
+};
+\end{cppcode}
+И теперь сама имплементация:
+\begin{cppcode}[\nonumbers]
+template<class Edges, class F>
+struct areAnonymousValidAtImpl<Edges, F, true> {
+  using AnonymousEdgesAt = EdgesFromBy<Edges, F, void>;
+  template<class Edge>
+  struct hasNonTrivialGuard_t : Not_w<areSame2_t<EdgeOp::GuardW<Edge>, NoGuard>> {};
+  
+  using value_type = bool;
+  static constexpr bool value =
+      Imply<(TL::Size<AnonymousEdgesAt> > 1), TL::ifAll<hasNonTrivialGuard_t, AnonymousEdgesAt>>;
+};
+\end{cppcode}
+Анонимные ребра я вычленяю по типу события, в этом случае \verb"Event" будет \verb"void".
+Тут обратите внимание, как я сравниваю гарды.
+Я вынимаю их обертки
+\begin{cppcode}[\nonumbers]
+Value_t<decltype(guard), guard>
+\end{cppcode}
+и сравниваю их на равенство.%
+\footnote{Если вы будете просто сравнивать указатели на функции на равенство, то у вас есть несколько проблем.
+Во-первых, указатели на функции разных типов сравнивать на равенство нельзя и вам ругнется компилятор.
+Во-вторых, у вас может быть не функция, а объект с перегруженным оператором скобки.
+Тогда вообще проблема сравнивать два таких адреса.}
+Для тривиального действия я использую заранее подготовленный псевдоним для обертки \verb"NoGuard".
+И теперь как обычно публичная часть для использования:
+\begin{cppcode}[\nonumbers]
+template<class Edges, class F>
+struct areAnonymousValidAt_t : detail::areAnonymousValidAtImpl<Edges, F> {};
+
+template<class Edges, class F>
+constexpr bool areAnonymousValidAt = areAnonymousValidAt_t<Edges, F>::value;
+\end{cppcode}
+Теперь надо сделать проверку корректности для всех вершин.
+\begin{cppcode}[\nonumbers]
+template<class Edges, bool isCorrect = isEdgeList<Edges>>
+struct areAnonymousValidImpl {
+  static_assert(isEdgeList<Edges>,
+                "The first argument of areAnonymousValid MUST be a list of edges!");
+};
+
+template<class Edges>
+struct areAnonymousValidImpl<Edges, true> {
+  using States = ExtractStates<Edges, TL::List<>>;
+  template<class S>
+  using hasValidEdgesAt = areAnonymousValidAt_t<Edges, S>;
+
+  using value_type = bool;
+  static constexpr value_type value = TL::ifAll<hasValidEdgesAt, States>;
+};
+\end{cppcode}
+Тут я не мудрствую лукаво, я просто вычленяю все вершины из списка ребер считая, что \verb"EnExList" пустой.
+А дальше просто проверяю, что условие выполнено для всех вершин.
+И конечно же публичная часть:
+\begin{cppcode}[\nonumbers]
+template<class Edges>
+struct areAnonymousValid_t : detail::areAnonymousValidImpl<Edges> {};
+
+template<class Edges>
+constexpr bool areAnonymousValid = areAnonymousValid_t<Edges>::value;
+\end{cppcode}
+
+\subsubsection{Отсутствие петель в анонимных переходах}
+
+Я не буду особенно оптимизировать код проверки.
+Я сделаю обычный DFS для каждой вершины графа.
+То есть я буду стартовать в конкретной вершине \verb"S" и потом идти в глубину и запоминать предыдущий путь, чтобы понять вернулись ли мы в одну из пройденных вершин или нет.
+Вот как выглядит код имплементации:
+\begin{cppcode}[\nonumbers]
+template<class Edges, class S, class Visited = TL::EmptyLike<Edges>>
+struct hasNoCycleFrom_t {
+  static constexpr bool isSVisited = TL::Contains<Visited, S>;
+
+  template<class S1, class Visited1>
+  struct hasNoCycleFromNonVis_t {
+    using EdgesFromS = EdgesFrom<Edges, S1>;
+    using Visited2 = TL::Append<Visited1, S1>;
+    template<class Edge>
+    using hasNoCycleAfter_t = hasNoCycleFrom_t<Edges, EdgeOp::Target<Edge>, Visited2>;
+    
+    using value_type = bool;
+    static constexpr value_type value = TL::ifAll<hasNoCycleAfter_t, EdgesFromS>;
+  };
+
+  using value_type = bool;
+  static constexpr value_type value =
+      IfElse_v<isSVisited, Bool_t<false>, hasNoCycleFromNonVis_t<S, Visited>>;
+};
+\end{cppcode}
+Здесь \verb"Visited" -- вершины составляющие пройденный путь до данной вершины \verb"S".
+В начале этот список пустой.
+Дальше я проверяю вершина \verb"S" была посещена или нет.
+Если да, то мы нашли цикл и надо вернуть \verb"false".
+Если же вершина посещена не была, то я добавляю ее в \verb"Visited" и запускаю рекурсивно проверку для каждого исходящего ребра.
+Проверка для непосещенной вершины вынесена в отдельный шаблон:
+\begin{cppcode}[\nonumbers]
+template<class S1, class Visited1>
+struct hasNoCycleFromNonVis_t {
+  using EdgesFromS = EdgesFrom<Edges, S1>;
+  using Visited2 = TL::Append<Visited1, S1>;
+  template<class Edge>
+  using hasNoCycleAfter_t = hasNoCycleFrom_t<Edges, EdgeOp::Target<Edge>, Visited2>;
+  
+  using value_type = bool;
+  static constexpr value_type value = TL::ifAll<hasNoCycleAfter_t, EdgesFromS>;
+};
+\end{cppcode}
+Тут в точности все как я описал выше.
+После этого я завожу непосредственно переменную с результатом (не факт, что она мне будет нужна):
+\begin{cppcode}[\nonumbers]
+template<class Edges, class S>
+constexpr bool hasNoCycleFrom = hasNoCycleFrom_t<Edges, S>::value;
+\end{cppcode}
+Теперь имплементация проверки, что граф является Directed Acyclic Graph.
+\begin{cppcode}[\nonumbers]
+template<class Edges, bool isCorrect = isEdgeList<Edges>>
+struct isDAGImpl {
+  static_assert(isEdgeList<Edges>, "The argument of isDAG MUST be a list of edges!");
+};
+
+template<class Edges>
+struct isDAGImpl<Edges, true> {
+  using States = ExtractStates<Edges, TL::EmptyLike<Edges>>;
+  template<class S>
+  using hasNoCycleFromT = hasNoCycleFrom_t<Edges, S>;
+
+  using value_type = bool;
+  static constexpr value_type value = TL::ifAll<hasNoCycleFromT, States>;
+};
+\end{cppcode}
+Тут без сюрпризов, я вычленяю все состояния из ребер и после этого для каждого состояния запускаю проверку, что из него нет цикла, и проверяю, что все условия выполнены одновременно.
+Думаю можно наловчиться и сделать еще помеченные состояния, в которых мы уже были, чтобы не перебирать лишние состояния, но я пожалуй тут не буду этим заниматься.
+И как обычно методы для использования:
+\begin{cppcode}[\nonumbers]
+template<class Edges>
+struct isDAG_t : detail::isDAGImpl<Edges> {};
+
+template<class Edges>
+constexpr bool isDAG = isDAG_t<Edges>::value;
+\end{cppcode}
+
+\subsubsection{Проверка корректности ребер}
+
+% TO DO
+TO DO
+\begin{cppcode}[\nonumbers]
+
+\end{cppcode}
+
+
+\subsection{Примеры использования}
+
+% TO DO
+TO DO
+
+}
+
+\end{document}

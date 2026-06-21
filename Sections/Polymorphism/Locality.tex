@@ -98,15 +98,15 @@
 Хотя сделать виртуальным деструктор тут бы все же не мешало.}
 \[
 \xymatrix{
-  *+[F:<3pt>]{\usebox{\classIVh}}&*+[F:<3pt>]{\usebox{\funchb}}\ar[l]&{}\\
-  {}&*+[F:<3pt>]{\usebox{\funccppc}}\ar[u]&*+[F:<3pt>]{\usebox{\maina}}\ar[ul]\\
+  {}&*+[F:<3pt>]{\usebox{\classIVh}}&*+[F:<3pt>]{\usebox{\funchb}}\ar[l]\\
+  {}&*+[F:<3pt>]{\usebox{\maina}}\ar[ur]&*+[F:<3pt>]{\usebox{\funccppc}}\ar[u]\\
 }
 \]
 Если же класс \verb"B" принадлежал сторонней библиотеке, то нам придется все же изменить код \verb"main" следующим образом:
 \[
 \xymatrix{
-  *+[F:<3pt>]{\usebox{\classIVh}}&*+[F:<3pt>]{\usebox{\funchb}}\ar[l]&*+[F:<3pt>]{\usebox{\classBIAh}}\\
-  {}&*+[F:<3pt>]{\usebox{\funccppc}}\ar[u]&*+[F:<3pt>]{\usebox{\mainb}}\ar[ul]\ar[u]\\
+  *+[F:<3pt>]{\usebox{\classBh}}&*+[F:<3pt>]{\usebox{\classIVh}}&*+[F:<3pt>]{\usebox{\funchb}}\ar[l]\\
+  *+[F:<3pt>]{\usebox{\classBIAh}}\ar[ur]\ar[u]&*+[F:<3pt>]{\usebox{\mainb}}\ar[ur]\ar[l]&*+[F:<3pt>]{\usebox{\funccppc}}\ar[u]\\
 }
 \]
 То есть код на стороне пользователя просто так не останется неизменным.
@@ -120,7 +120,7 @@
 \[
 \xymatrix{
   *+[F:<3pt>]{\texttt{A.h}}&*+[F:<3pt>]{\texttt{function.h}}\ar[l]&{}\\
-  *+[F:<3pt>]{\texttt{A.cpp}}\ar[u]&*+[F:<3pt>]{\texttt{function.cpp}}\ar[u]&*+[F:<3pt>]{\texttt{main.cpp}}\ar[ul]\\
+  *+[F:<3pt>]{\texttt{A.cpp}}\ar[u]&*+[F:<3pt>]{\texttt{main.cpp}}\ar[u]&*+[F:<3pt>]{\texttt{function.cpp}}\ar[ul]\\
 }
 \]
 И после добавления полиморфизма (считаем, что \verb"B" внешний класс, в который нельзя вмешиваться).
