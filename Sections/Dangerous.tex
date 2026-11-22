@@ -97,10 +97,10 @@
 void f() {
   A* ptr = new A();
   g(ptr);
-  delete ptr;
+  delete ptr; (*@\cpplabel{danger-delete}@*)
 }
 \end{cppcode}
-Если функция \verb"g" может кинуть исключение, то наличие \verb"delete" в 4 строчке не поможет.
+Если функция \verb"g" может кинуть исключение, то наличие \verb"delete" в строчке~\ref{danger-delete} не поможет.
 Мы выйдем из функции \verb"f" раньше.
 Потому такие парные операции всегда надо запаковывать в RAII (смотри~\ref{section::RAII}) обертки (раздел~\ref{section::UniquePtr}):
 \begin{cppcode}
