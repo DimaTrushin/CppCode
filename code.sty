@@ -14,6 +14,7 @@
 \newcommand{\@twfont}{\footnotesize\ttfamily}
 \lstdefinestyle{Cpp}{
   numbers=left,
+  escapeinside={(*@}{@*)},
   showlines=true,
   frame=tb,
   tabsize=2,
@@ -46,4 +47,10 @@
 {\setcounter{@cppcode}{\value{lstnumber}}}
 
 \newcommand{\inputcppcode}[2][]{\lstinputlisting[language=C++, style=Cpp, #1]{#2}}
+
+\newcommand{\cpplabel}[1]{%
+  \def\@currentlabel{\thelstnumber}%
+  \phantomsection
+  \label{#1}%
+}
 
