@@ -1,4 +1,4 @@
-\ProvidesFile{BadCode.tex}[Признаки плохого кода]
+\ProvidesFile{BadCode.tex}[Признаки плохого и хорошего кода]
 
 
 \section{Признаки хорошего и плохого кода}
@@ -52,7 +52,7 @@
 \begin{cppcode}[numbers = none]
 x = v * t;
 p = m * v;
-E = 1/2 * m * v * v;
+E = 1. / 2. * m * v * v;
 \end{cppcode}
 \end{minipage}
 }&{
@@ -60,7 +60,7 @@ E = 1/2 * m * v * v;
 \begin{cppcode}[numbers = none]
 coordinate = velocity * time;
 impulse = mass * velocity;
-Energy = 1/2 * mass * velocity * velocity;
+Energy = 1. / 2. * mass * velocity * velocity;
 \end{cppcode}
 \end{minipage}
 }\\
@@ -122,7 +122,7 @@ public:
   
   void run(); // run event loop
 private:
-  auto read_user_input();
+  auto read_user_input() { /* implementation */ }
 
   World world_;
   Camera camera_;
@@ -143,9 +143,9 @@ void Application::run() {
   /*somewhere in event loop*/
   auto action = read_user_input();
   camera_.move(action);
-  Picture picture = renderer.make(world_,
-                                  camera_,
-                                  lights_);
+  Picture picture = renderer_.make(world_,
+                                   camera_,
+                                   lights_);
   screen_.draw(picture);
   ...
 }
@@ -423,7 +423,21 @@ int main() {
 \paragraph{Value Semantics}
 
 Одна из причин почему value semantics важная штука -- она улучшает локальность.
+Например работать со следующими типами
+\begin{cppcode}
+int x;
+std::unique_ptr<A> y;
+std::shared_ptr<const B> z;
+\end{cppcode}
+намного проще, чем
+\begin{cppcode}
+A* y;
+std::shared_ptr<B> z;
+\end{cppcode}
 Потому что по определению данные в двух разных переменных никогда ни при каких условиях не влияют друг на друга, какой бы ни была имплементация.
+Хорошим примером является \verb"shared_ptr<const B>" и \verb"shared_ptr<B>".
+Первый обладает value semantics, второй нет.
+Хотя оба имеют одинаковую имплементацию (но разный перечень доступных методов).
 Подробнее про семантику можно глянуть в разделе~\ref{section::Semantics}.
 
 \subsection{Единый источник правды}
@@ -514,14 +528,14 @@ Application::Application()
   : camera_(initialize_camera()),
     lights_(initialize_lights()),
     world_(initialize_world(),
-            &camera,
+            &camera_,
             &lights_),
     renderer_(600, 800, &world_) {
 }
 void Application::run() {
   ...
   /*Somewhere in event loop*/
-  camera_.move(action)
+  camera_.move(action);
   renderer_.make();
   ...
 }
@@ -705,12 +719,12 @@ void Application::move_camera() {
   camera_.move(action);
 }
 
-vpod Application::make_picture() {
+void Application::make_picture() {
   picture_ = renderer_.make(world_, camera_, lights_);
 }
 
 void Application::draw_picture() {
-  screen_.draw(picture);
+  screen_.draw(picture_);
 }
 \end{cppcode}
 Ну а действительно, зачем нам явно подставлять все поля класса в функции, они же видны из любого метода класса.
@@ -729,8 +743,8 @@ void Application::run() {
   /*somewhere in event loop*/
   auto action = read_user_input();
   camera_.move(action);
-  picture_ = renderer.make(world_, camera_, lights_);
-  screen_.draw(picture);
+  picture_ = renderer_.make(world_, camera_, lights_);
+  screen_.draw(picture_);
   ...
 }
 \end{cppcode}
@@ -743,7 +757,7 @@ void Application::run() {
   /*somewhere in event loop*/
   auto action = read_user_input();
   camera_.move(action);
-  picture = renderer.make(world_, camera_, lights_, std::move(picture));
+  picture = renderer_.make(world_, camera_, lights_, std::move(picture));
   screen_.draw(picture);
   ...
 }
@@ -771,7 +785,7 @@ short function(int, double&, char);
 Для того, чтобы подсказать на стороне пользователя, что аргумент может меняться, обычно принято передавать аргумент по указателю.
 В этом случае картина выглядит так
 \begin{cppcode}
-short function(int, double&, char);
+short function(int, double*, char);
 
 int x = 1;
 double y = 2.;
@@ -798,7 +812,7 @@ short r = function(x, &y, z);
 \end{enumerate}
 В соответствии с этими соглашениями предыдущий пример выглядел бы так.
 \begin{cppcode}
-short function(int, char, double&);
+short function(int, char, double*);
 
 int x = 1;
 double y = 2.;
@@ -879,13 +893,13 @@ int main() {
 \begin{cppcode}
 int main() {
   auto data = read();
-  vector<int> result = apply_algorithm(data);
-  print(result);
+  apply_algorithm(f, &data);
+  print(data);
   return 0;
 }
 \end{cppcode}
 Обратите внимание как теперь выглядит функция \verb"main".
-Теперь все строки кода на одном уровне: мы в начале читаем данные, потом обрабатываем данные и получаем результат, потом печатаем результат.
+Теперь все строки кода на одном уровне: мы в начале читаем данные, потом обрабатываем данные in-place (как и раньше), потом печатаем результат.
 Нужны детали -- смотрим в имплементацию каждой функции.
 
 \paragraph{Измерение времени}
@@ -927,7 +941,7 @@ int main() {
 void function() {
   Data d = read_data();
   Header h = compose_header();
-  std::scoped_lock(mutex); // too low level
+  std::scoped_lock guard(mutex); // too low level
   write_to_file(h, d);
 }
 \end{cppcode}
@@ -1003,6 +1017,29 @@ Network n = b.extract();
 Такой подход вызова команд друг за другом называется Chaining.
 Его использование нисколько не противоречит правилу про уровень доступа, потому что вы просто хотите на одном объекте вызвать много методов друг за другом.
 Это просто другой стиль использования плюсового синтаксиса.
+Если вам нужен краткий совет, то можно придерживаться следующего правила (не более двух имен):
+\begin{enumerate}
+\item В обращениях вида \verb"namespace::name"
+
+\item В обращениях вида \verb"object.member"
+\end{enumerate}
+должны использоваться не более двух имен на вызов метода.
+Например
+\begin{cppcode}
+// OK
+point.x;
+a.f();
+// Bad
+a.b.f();
+a.b.c.g();
+\end{cppcode}
+Почему я говорю <<имен>>, а не переменных или функций.
+Во-первых, потому что я включаю сюда и имена для namespace-ов.
+А во-вторых, потому что в случае builder-а у вас несмотря на большое количество вызовов после точки
+\begin{cppcode}
+b.input(3).addLinear(5).add(Sigmoid).addLinear(2).add(ReLu);
+\end{cppcode}
+В каждом месте вызова фигурирует всего одна пара -- объект \verb"b" и используемый метод.
 
 \subsection{Не сваливать все в кучу}
 \label{section::SeparateStuff}
@@ -1118,12 +1155,12 @@ private:
 
 //Picture.cpp
 // includes for FileWriter and FileReader
-Picture fromBMP(std::filesystem::path file) {
+Picture Picture::fromBMP(std::filesystem::path file) {
   FileReader r(file);
   return r.readBMP<Picture>();
 }
 
-Picture fromJPG(std::filesystem::path file) {
+Picture Picture::fromJPG(std::filesystem::path file) {
   FileReader r(file);
   return r.readJPG<Picture>();
 }
@@ -1135,7 +1172,7 @@ Picture fromJPG(std::filesystem::path file) {
 \paragraph{\texttt{std::string}}
 
 Стандартные строки -- это пример плохого класса.
-Давайте посмотрим на список методов этого класса, начиная с модифицирующих методов.
+Давайте посмотрим на часть методов этого класса:
 \begin{multicols}{3}
 \begin{enumerate}
 \item \texttt{clear}
@@ -1231,14 +1268,21 @@ consume(vec);
 А точнее метод \verb"size".
 Кто писал такой код
 \begin{cppcode}
-std::vector<int> vec = { ... };
+std::vector<int> vec = {10, 20, 30};
+for (int i = -vec.size(); i < 0ull; ++i)
+  vec[-i] = ...;
+// or
+std::size_t n = std::numeric_limits<int>::max() + 1;
+assert(vec.size() == n);
 for (int i = 0; i < vec.size(); ++i)
-  vec[i] = ...;
+  vec[i]  = ...;
 \end{cppcode}
 тот знает мою боль.
-Дело в том, что в цикле \verb"for" происходит сравнение знакового \verb"i" и без знакового \verb"vec.size()".
-Так лучше не делать, можно легко добиться UB смешивая знаковые и без знаковые типы.
-Поэтому в C++20 даже добавили \verb"ssize", которая возвращает знаковое значение для размера вектора.
+В первом случае цикл не исполнится, так как \verb"i" преобразуется к большему беззнаковому типу.
+А во втором случае произойдет переполнение счетчика, а это UB.
+И все это из-за сравнение знакового \verb"i" и без знакового \verb"vec.size()".
+Так лучше не делать, можно легко добиться UB смешивая знаковые и без знаковые типы и не заметить этого.
+Кстати в C++20 даже добавили \verb"std::ssize", которая возвращает знаковое значение для размера вектора.
 Я считаю это успех.
 
 \subsection{Интрузивность и неинтрузивность}
@@ -1323,11 +1367,11 @@ int main() {
 
 \paragraph{Синхронизация доступа}
 
-Еще один пример, который сходу приходит на ум -- \verb"std::atomic".
+Еще один пример, который сходу приходит на ум -- wrapper вокруг типа \verb"T", который имеет интерфейс такой же как у класса \verb"T", но при этом защищает каждый вызов мьтексом (который дополнительно в нем хранится).
 Этот шаблон позволяет сделать методы класса атомарными и корректными для использования в многопоточном исполнении.
-Для конкретных классов вроде \verb"shard_ptr" и прочие \verb"std::atomic" имеет весьма хитрую интрузивную реализацию.
-Однако, в случае неизвестного класса, этот шаблон просто добавляет \verb"std::mutex" и любой метод перед вызовом блокирует мьютекс, а после завершения метода отпускает его, что не позволяет потокам одновременно зайти в критическую секцию.
-Это не лучшее решение, но оно простое и работающее всегда, и очень часто оно еще и не такое уж плохое и вы не заметите разницы.
+Для конкретных классов или для меньших гарантий (как например \verb"std::atomic" гарантирует атомарность только трех операций: load, store, compare-exchange) часто можно сделать специальную более эффективную имплементацию.
+Например для \verb"shared_ptr" и \verb"std::atomic" в STL своя имплементация.
+Решение с \verb"std::mutex" не самое лучшее, но оно простое и работающее всегда, и очень часто оно еще и не такое уж плохое и вы не заметите разницы.
 Кроме того, это пример неинтрузивной имплементации.
 
 \paragraph{Что выбрать? Что хорошо, а что плохо?}
@@ -1411,12 +1455,12 @@ Matrix m = ... ;
 std::vector<int> indices;
 indices.reserve(m.size());
 for (int i = 0; i < m.size(); ++i)
-  incides.push_back(i);
+  indices.push_back(i);
 
-std::mt19937 generator = 42;
+std::mt19937 generator{42};
 std::shuffle(indices.begin(), indices.end(), generator);
 
-m.shuffle(incides);
+m.shuffle(indices);
 \end{cppcode}
 В этом коде много чего плохо.
 Мы в строках~3-6 мы видим нарушение уровня абстракции.
@@ -1427,7 +1471,7 @@ std::vector<int> make_indices(int n) {
   std::vector<int> indices;
   indices.reserve(n);
   for (int i = 0; i < n; ++i)
-    incides.push_back(i);
+    indices.push_back(i);
   return indices;
 }
 \end{cppcode}
@@ -1437,12 +1481,14 @@ Matrix m = ... ;
 
 std::vector<int> indices  = make_indices(m.size());
 
-std::mt19937 generator = 42;
+std::mt19937 generator{42};
 std::shuffle(indices.begin(), indices.end(), generator);
 
-m.shuffle(incides);
+m.shuffle(indices);
 \end{cppcode}
-Кроме того, благодаря NRVO объект \verb"indices" будет создан прямо по адресу возвращаемого объекта.
+Кроме того, благодаря NRVO объект \verb"indices" будет создан прямо по адресу возвращаемого объекта.%
+\footnote{Строго говоря стандарт не гарантирует NRVO, только RVO, но на практике хорошие компиляторы вас не подведут.
+Но даже если это не так, это вам будет стоить 1 лишний мув.}
 А потому это вам ничего не стоит при исполнении.
 Теперь в строках~5-6 мы хотим просто перемешать элементы этого массива.
 Мы не хотим тут задавать генератор, не хотим специфицировать как именно мы хотим это делать.
@@ -1453,12 +1499,18 @@ m.shuffle(incides);
 Передавать сид не имеет смысла, так как это будет по сути делать каждый вызов функции детерминированным, и вся случайность будет перенесена в выбор сида.
 Потому я просто иницилизирую глобальную переменную спрятанную внутри функции, то есть статическую переменную в функции.
 По-хорошему, надо спрятать все это в класс \verb"Random", который умеет помнить свое состояние.
-Но тут я пойду простым путем.
+Но тут я пойду простым путем.%
+\footnote{Для тех кто задается вопросом, что же надо возвращать тут \texttt{std::vector<int>} или \textt{std::vector<int>&&}, посвящается это замечание.
+Если мы будем возвращать объект по rvalue ссылке, то в результате присваивания \texttt{ind = shuffle(std::move(ind))} у нас будет самоприсваивание объекта самому себе.
+Формально в стандарте такое поведение unspecified.
+Технически это значит, что у вас внезапно результат будет корректным на одном компиляторе, и скажем пустым вектором на другом (или на другой версии компилятора).}%
+\footnote{Так же наличие \texttt{static} переменной -- это наличие глобальной переменной внутри функции.
+Если этот объект не допускает корректного использования из разных потоков, то надо помнить о дополнительных мерах для предотвращения data race.}
 \begin{cppcode}
 std::vector<int> shuffle(std::vector<int>&& data) {
-  static std::mt19937 generator = 42;
+  static std::mt19937 generator{42};
   std::shuffle(data.begin(), data.end(), generator);
-  return data;
+  return std::move(data);
 }
 \end{cppcode}
 После чего код превращается в
@@ -1468,8 +1520,12 @@ Matrix m = ... ;
 std::vector<int> indices  = make_indices(m.size());
 indices = shuffle(std::move(indices));
 
-m.shuffle(incides);
+m.shuffle(indices);
 \end{cppcode}
+Тут нужно пояснить одну важную деталь.
+Если метод \verb"shuffle" бросит исключение, то indices останется в состоянии после мува.
+Это все еще корректное состояние объекта и для функций используемых в конструкторе, который все равно кидает исключение и забывает про все свои аргументы, это даже не страшно.
+Но возможно вы захотите другое поведение.
 Ну и наконец-то в этом месте все что мы хотим сделать -- перемешать столбцы матрицы.
 И нам не то чтобы важен массив индексов \verb"indices", потому что это лишь вспомогательные данные, которые нам приходится строить из-за того, что библиотека для работы с матрицами предоставляет такой интерфейс.
 Давайте просто сделаем нужную функцию, которая будет делать то, что нам надо.
@@ -1477,8 +1533,8 @@ m.shuffle(incides);
 Matrix shuffle(Matrix&& matrix) {
   std::vector<int> indices  = make_indices(matrix.size());
   indices = shuffle(std::move(indices));
-  matrix.shuffle(incides);
-  return matrix;
+  matrix.shuffle(indices);
+  return std::move(matrix);
 }
 \end{cppcode}
 И теперь наш код превращается в
@@ -1492,10 +1548,10 @@ m = shuffle(std::move(m));
 void shuffle(Matrix* matrix) {
   std::vector<int> indices  = make_indices(matrix->size());
   indices = shuffle(std::move(indices));
-  matrix->shuffle(incides);
+  matrix->shuffle(indices);
 }
 \end{cppcode}
-И звать  код вида
+И звать код вида
 \begin{cppcode}
 Matrix m = ... ;
 shuffle(&m);
@@ -1503,6 +1559,24 @@ shuffle(&m);
 Это тоже вариант и до появления move семантики это был единственный эффективный способ не копировать данные.
 Сейчас я предпочитаю использовать \verb"std::move", чтобы был явно виден поток данных.
 Но это не принципиально.
+Так ж можно использовать view-объекты:
+\begin{cppcode}
+void shuffle(std::span<int> indices) {
+  static std::mt19937 generator{42};
+  std::shuffle(indices.begin(), indices.end(), generator);
+}
+\end{cppcode}
+И потом позвать так:
+\begin{cppdoe}
+std::vector<int> indices = make_indices(n);
+shuffle(indices);
+\end{cppcode}
+Использование view-объектов делает подход менее явным и сопоставимым с использованием ссылок напрямую со стороны пользователя метода.
+Главный плюс лишь в том, что тут мы избавляемся от вида контейнера и его точного типа.
+Такое поведение может быть желаемым.
+Ну и никто вам не мешает сделать свой view-объект, который строится по указателю на контейнер.
+Так же использование ссылок или view-объектов не дает ощутимо большей надежности при исключениях.
+Если метод \verb"shuffle" внутр кидает исключение, то \verb"indices" не лишится своего содержимого, но оно уже может быть изменено.
 
 \item Мы не вводим класс для выполнения вспомогательной работы.
 Один из лучших примеров, который я знаю -- это имплементация \verb"std::vector".
@@ -1531,7 +1605,7 @@ public:
   ...
 private:
   T* data_ = nullptr;
-  size_t size_ = 0;
+  size_t capacity_ = 0;
 };
 
 template<class T>
@@ -1583,8 +1657,6 @@ constexpr bool isVoid = std::is_same_v<std::remove_cv_t<T>, void>;
 
 template<class T>
 using disableIfVoid = std::enable_if_t<!isVoid<T>>;
-template<class T>
-
 } // namespace detail
 
 template<class T, class = detail::disableIfVoid<T>>
@@ -1613,14 +1685,14 @@ Point p = ... ;
 Box b = ... ;
 ...
 // check if p is in the box
-if (p.x >= b.leftdown.x && p.x <= b.rightup.y && p.y >= b.leftdown.y && p.y <= b.rightup.y) {
+if (p.x >= b.leftdown.x && p.x <= b.rightup.x && p.y >= b.leftdown.y && p.y <= b.rightup.y) {
   ...
 }
 \end{cppcode}
 В этом случае вместо комментария нужно создать нормальную функцию, чье имя будет говорить, что вы проверяете
 \begin{cppcode}
 bool is_in_box(Point p, Box b) {
-  return p.x >= b.leftdown.x && p.x <= b.rightup.y && p.y >= b.leftdown.y && p.y <= b.rightup.y;
+  return p.x >= b.leftdown.x && p.x <= b.rightup.x && p.y >= b.leftdown.y && p.y <= b.rightup.y;
 }
 // Then the previous code:
 Point p = ... ;
@@ -1719,8 +1791,9 @@ private:
   int x_ = 0;
 };
 \end{cppcode}
-Тогда при любом нарушении инварианта ваша программа упадет.
-То есть компилятор вам поможет найти эту ошибку.
+Тогда при любом нарушении инварианта ваша программа упадет.%
+\footnote{Только не забывайте, что \texttt{assert}-ы отключаются макросом \texttt{NDEBUG}, который часто включен в релизных сборках.}
+Таким образом падение программы поможет вам найти эту ошибку.
 А комментарии компилятор не понимает, а программисты не читают.
 Аналогичная проблема происходит с проверкой preconditions и postconditions у функций.
 Их тоже надо проверять через \verb"assert".
