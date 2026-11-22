@@ -392,15 +392,15 @@ int main() {
 void f(int, double);
 
 int main() {
-  Time start = Timer.now();
+  Time start = Timer.now(); (*@\cpplabel{badcode-local-time-start}@*)
   f(5, 42.);
-  Time elapsed = Timer.now() - start;
+  Time elapsed = Timer.now() - start; (*@\cpplabel{badcode-local-time-end}@*)
   return 0;
 }
 \end{cppcode}
 Этот код хорош тем, что в нем сразу несколько проблем.
 Тут же мы видим не локальность.
-А именно, мы работу по измерению времени делаем не в одном месте, а сразу в двух строчках~4 и~6.
+А именно, мы работу по измерению времени делаем не в одном месте, а сразу в двух строчках~\ref{badcode-local-time-start} и~\ref{badcode-local-time-end}.
 И на практике эти строчки могут разъехаться очень далеко.
 Данную ситуацию можно отнести к случаю, когда у вас есть какие-то парные связанные друг с другом операции, которые должны гарантированно выполняться парами.
 Раздел~\ref{section::Decorators} про Декораторы как раз был посвящен тому, как стоит организовывать код в такой ситуации.
@@ -709,9 +709,9 @@ private:
 void Application::run() {
   ...
   /*somewhere in event loop*/
-  move_camera();
+  move_camera(); (*@\cpplabel{badcode-run-move}@*)
   make_picture();
-  draw_picture();
+  draw_picture(); (*@\cpplabel{badcode-run-draw}@*)
   ...
 }
 void Application::move_camera() {
@@ -729,7 +729,7 @@ void Application::draw_picture() {
 \end{cppcode}
 Ну а действительно, зачем нам явно подставлять все поля класса в функции, они же видны из любого метода класса.
 И у вас в классе появляются методы, которые ничего не принимают и ничего не возвращают, но они делают всю работу.
-И вот как понять по коду выше в строках~4-6, откуда и куда текут данные?
+И вот как понять по коду выше в строках~\ref{badcode-run-move}--\ref{badcode-run-draw}, откуда и куда текут данные?
 Так же обратите внимание, что теперь название метода \verb"move_camera" просто врет программисту.
 Дело в том, что этот метод не только двигает камеру, но и читает пользовательский ввод.
 Кроме того, теперь мы еще и новую переменную положили в \verb"Application", которая вообще то имеет смысл только локально для передачи данных от \verb"renderer" к \verb"screen" и не отражает состояния приложения.
@@ -879,16 +879,16 @@ apply_algorithm(function, &data);
 Вот пример кода с нарушением уровня абстракции.
 \begin{cppcode}
 int main() {
-  auto data = read();
-  for (size_t i = 0; i < data.size(); ++i)
-    data[i] = f(data[i]);
-  print(data);
+  auto data = read(); (*@\cpplabel{badcode-main-read}@*)
+  for (size_t i = 0; i < data.size(); ++i) (*@\cpplabel{badcode-main-loop}@*)
+    data[i] = f(data[i]); (*@\cpplabel{badcode-main-store}@*)
+  print(data); (*@\cpplabel{badcode-main-print}@*)
   return 0;
 }
 \end{cppcode}
-Мы видим, что строки~2 и~5 -- это делегирование высокоуровневой работы другим функциям.
-Но в то же время в строках с~3 по~4 идет низкоуровневая работа по построению результата.
-Для изменения уровня абстракции, проще поднять уровень абстракции у секции с 3 по 4 строки выделением их в функцию:
+Мы видим, что строки~\ref{badcode-main-read} и~\ref{badcode-main-print} -- это делегирование высокоуровневой работы другим функциям.
+Но в то же время в строках с~\ref{badcode-main-loop} по~\ref{badcode-main-store} идет низкоуровневая работа по построению результата.
+Для изменения уровня абстракции, проще поднять уровень абстракции у секции с~\ref{badcode-main-loop} по~\ref{badcode-main-store} строки выделением их в функцию:
 \begin{cppcode}
 int main() {
   auto data = read();
@@ -908,15 +908,15 @@ int main() {
 void f(int, double);
 
 int main() {
-  Time start = Timer.now();
-  f(5, 42.);
-  Time elapsed = Timer.now() - start;
+  Time start = Timer.now(); (*@\cpplabel{badcode-abs-time-start}@*)
+  f(5, 42.); (*@\cpplabel{badcode-abs-time-call}@*)
+  Time elapsed = Timer.now() - start; (*@\cpplabel{badcode-abs-time-end}@*)
   return 0;
 }
 \end{cppcode}
-В этом случае строчка~5 -- это делегирование какой-то вычислительной задачи другой функции.
+В этом случае строчка~\ref{badcode-abs-time-call} -- это делегирование какой-то вычислительной задачи другой функции.
 Это высокоуровневая работа.
-Измерение времени происходит в строках~4 и~6.
+Измерение времени происходит в строках~\ref{badcode-abs-time-start} и~\ref{badcode-abs-time-end}.
 Причем мы руками создаем две переменные, руками находим разность между началом и концом.
 Это явно более низкоуровневая работа.
 Потому в этом примере происходит нарушение абстракции.
@@ -938,15 +938,15 @@ int main() {
 Например, если вы хотите защитить данные для многопоточности мьютексом вы можете написать что-то такое
 \begin{cppcode}
 void function() {
-  Data d = read_data();
-  Header h = compose_header();
-  std::scoped_lock guard(mutex); // too low level
-  write_to_file(h, d);
+  Data d = read_data(); (*@\cpplabel{badcode-mutex-data}@*)
+  Header h = compose_header(); (*@\cpplabel{badcode-mutex-header}@*)
+  std::scoped_lock guard(mutex); (*@\cpplabel{badcode-mutex-lock}@*) // too low level
+  write_to_file(h, d); (*@\cpplabel{badcode-mutex-write}@*)
 }
 \end{cppcode}
-Если посмотреть на функцию выше, то мы видим, что строки~2, 3 и~5 -- это делегирование работы другим функциям.
+Если посмотреть на функцию выше, то мы видим, что строки~\ref{badcode-mutex-data}, \ref{badcode-mutex-header} и~\ref{badcode-mutex-write} -- это делегирование работы другим функциям.
 Это код высокого уровня.
-Однако, в строке~4 идет супер низкоуровневая операция -- захват мьютекса.
+Однако, в строке~\ref{badcode-mutex-lock} идет супер низкоуровневая операция -- захват мьютекса.
 Это явно нарушение уровня абстракции.
 В бизнеслогике вообще не должны фигурировать всякие низкоуровневые детали имплементации.
 Вам все равно что там надо залочить на уровне железа, на уровне функции \verb"function" все что нас интересует -- мы хотим безопасно записать данные в файл.
@@ -983,7 +983,7 @@ public:
     return b.f();
   }
   int g() const {
-    return b.c.g(); // BAD
+    return b.c.g(); (*@\cpplabel{badcode-access-deep}@*) // BAD
   }
   void h(int x, int y) {
     d.h(x, y);
@@ -993,7 +993,7 @@ private:
   D d;
 };
 \end{cppcode}
-Вот так уже лучше, но строчка~7 -- это тоже нарушение уровня доступа.
+Вот так уже лучше, но строчка~\ref{badcode-access-deep} -- это тоже нарушение уровня доступа.
 Теперь уже объект класса \verb"B" не предоставляет нужные методы для работы с ним, а потому надо метод \verb"g" пробросить в интерфейс класса \verb"B", чтоб написать так
 \begin{cppcode}
 int g() const {
@@ -1451,10 +1451,10 @@ std::cout << "S = " << S << '\n';
 \begin{cppcode}
 Matrix m = ... ;
 
-std::vector<int> indices;
+std::vector<int> indices; (*@\cpplabel{badcode-idx-first}@*)
 indices.reserve(m.size());
 for (int i = 0; i < m.size(); ++i)
-  indices.push_back(i);
+  indices.push_back(i); (*@\cpplabel{badcode-idx-last}@*)
 
 std::mt19937 generator{42};
 std::shuffle(indices.begin(), indices.end(), generator);
@@ -1462,7 +1462,7 @@ std::shuffle(indices.begin(), indices.end(), generator);
 m.shuffle(indices);
 \end{cppcode}
 В этом коде много чего плохо.
-В строках~3-6 мы видим нарушение уровня абстракции.
+В строках~\ref{badcode-idx-first}--\ref{badcode-idx-last} мы видим нарушение уровня абстракции.
 В этой части все что мы хотим сделать -- создать вектор индексов от $0$ до $n-1$.
 Это должно делаться в одну строчку вызовом одной функции, которую надо написать так:
 \begin{cppcode}
@@ -1481,8 +1481,8 @@ Matrix m = ... ;
 
 std::vector<int> indices  = make_indices(m.size());
 
-std::mt19937 generator{42};
-std::shuffle(indices.begin(), indices.end(), generator);
+std::mt19937 generator{42}; (*@\cpplabel{badcode-shuf-gen}@*)
+std::shuffle(indices.begin(), indices.end(), generator); (*@\cpplabel{badcode-shuf-call}@*)
 
 m.shuffle(indices);
 \end{cppcode}
@@ -1490,7 +1490,7 @@ m.shuffle(indices);
 \footnote{Строго говоря стандарт не гарантирует NRVO, только RVO, но на практике хорошие компиляторы вас не подведут.
 Но даже если это не так, это вам будет стоить 1 лишний мув.}
 А потому это вам ничего не стоит при исполнении.
-Теперь в строках~5-6 мы хотим просто перемешать элементы этого массива.
+Теперь в строках~\ref{badcode-shuf-gen}--\ref{badcode-shuf-call} мы хотим просто перемешать элементы этого массива.
 Мы не хотим тут задавать генератор, не хотим специфицировать как именно мы хотим это делать.
 Это все мы хотим инкапсулировать тоже.
 Однако, тут у нас появляется состояние в виде инициализирующего сида.
@@ -1500,7 +1500,7 @@ m.shuffle(indices);
 Потому я просто инициализирую глобальную переменную спрятанную внутри функции, то есть статическую переменную в функции.
 По-хорошему, надо спрятать все это в класс \verb"Random", который умеет помнить свое состояние.
 Но тут я пойду простым путем.%
-\footnote{Для тех кто задается вопросом, что же надо возвращать тут \texttt{std::vector<int>} или \texttt{std::vector<int>&&}, посвящается это замечание.
+\footnote{Для тех кто задается вопросом, что же надо возвращать тут \texttt{std::vector<int>} или \texttt{std::vector<int>\&\&}, посвящается это замечание.
 Если мы будем возвращать объект по rvalue ссылке, то в результате присваивания \texttt{ind = shuffle(std::move(ind))} у нас будет самоприсваивание объекта самому себе.
 Формально в стандарте такое поведение unspecified.
 Технически это значит, что у вас внезапно результат будет корректным на одном компиляторе, и скажем пустым вектором на другом (или на другой версии компилятора).}%
