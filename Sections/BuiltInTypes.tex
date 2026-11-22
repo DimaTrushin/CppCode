@@ -9,7 +9,7 @@
 \subsection{bool}
 
 Данный тип используется только для вычисления истинности логических выражений и ни для чего больше.
-Вот несколько важных пунктов, которые проясняют смысл этого общего заявления
+Вот несколько важных пунктов, которые проясняют смысл этого общего заявления:
 \begin{enumerate}
 \item Если вам надо проверить какое-то сложное условие и вы хотите завернуть его в функцию, то эта функция должна возвращать \verb"bool".
 Например
@@ -118,8 +118,11 @@ struct Node {
 Дополнительный плюс этого подхода заключается в том, что теперь можно много разных флагов хранить в одной переменной и не тратить по одному байту на разные свойства.
 Для этого полезно будет перегрузить операторы \verb"operator|", \verb"operator|=", \verb"operator&" и \verb"operator&=" для побитовых операций и получится%
 \footnote{Если вы поддерживаете побитовые операции, то обязательно укажите, что ваш \verb"enum class" имеет беззнаковый подлежащий тип.
-Потому что для знаковых типов побитовые операции часто UB.
-Лучше не играть с этим.}
+Можно запомнить, когда побитовая операция над знаковым типом определена, а когда это UB, но это слишком легко забыть.
+Проще вообще не делать побитовые операции над знаковыми типами.
+Побитовая операция работает с последовательностью бит, а последовательность бит -- это беззнаковый тип.
+Знаковый тип логически устроен как необязательный минус и затем последовательность бит.
+Как такое значение упаковано в памяти и как побитовая операция эту упаковку читает, из этой картины не следует, и держать это в голове незачем.}
 \begin{cppcode}
 enum class Status : unsigned char {
   None = 0,
@@ -153,7 +156,7 @@ Node node{.data = Data(), .status = Status::Visited | Status::Leaf};
 \subsection{Не использовать встроенные типы}
 % TO DO
 
-Давайте для начала перечислим, какие типы в C++ относятся к встроенным:
+Давайте перечислим типы C++. Встроенными обычно называют фундаментальные.
 \begin{enumerate}
 \item Фундаментальные типы:
 \begin{enumerate}
@@ -284,7 +287,7 @@ class Float { ... };
 class Double { ... };
 }
 \end{cppcode}
-Все методы этих классов важно сделать \verb"constexpr", \verb"noexcept".
+Все методы этих классов важно сделать \verb"constexpr" и \verb"noexcept".
 % TO DO 
 % Добавить пример имплементации.
 
@@ -367,14 +370,14 @@ private:
 \end{cppcode}
 Обратите внимание, что все аргументы принимаются по значению, так как мы делаем обертку над встроенным типом, который выгоднее передавать по значению.
 При этом конвертация типа \verb"T" к \verb"ODetector" неявная, а в обратную сторону явная.
-Это продиктовано тем, что мы хотим чтобы константы типа \verb"T" можно было присвоить к \verb"ODetector<T>" без изменения кода.
+Это продиктовано тем, что мы хотим, чтобы константы типа \verb"T" можно было присвоить объекту типа \verb"ODetector<T>" без изменения кода.
 То есть
 \begin{cppcode}
 int x = 4; // OK
 ODetector<int> y = 4; // OK
 \end{cppcode}
 Теперь имплементация методов.
-В начале имплементация методов конвертации:
+Сначала имплементация методов конвертации:
 \begin{cppcode}
 constexpr ODetector(T value) noexcept : value_(value) {}
 explicit constexpr operator T() const noexcept {
@@ -469,7 +472,7 @@ static constexpr bool DoesUnaryMinusOverflow(T value) noexcept {
   constexpr T offset = max() + min();
   if (offset < 0 && value == min())
     return true;
-  if (offset > 0 && value == max())
+  if (offset > 0 && value > -min())
     return true;
   return false;
 }
@@ -492,12 +495,14 @@ static constexpr bool DoesMultiplicationOverflow(T lhs, T rhs) noexcept {
   if (lhs == 0 || rhs == 0)
     return false;
   if (offset > 0) {
-    if ((rhs == -1 && lhs == max()) || (rhs == max() && lhs == -1))
+    if ((rhs == -1 && lhs > -min()) || (lhs == -1 && rhs > -min()))
       return true;
   } else if (offset < 0) {
-    if ((rhs == -1 && lhs == min()) || (rhs == min() && lhs == -1))
+    if ((rhs == -1 && lhs == min()) || (lhs == -1 && rhs == min()))
       return true;
   }
+  if (lhs == -1 || rhs == -1)
+    return false;
   if (lhs < 0) {
     if (rhs < 0) {
       return lhs < max() / rhs;
@@ -506,8 +511,6 @@ static constexpr bool DoesMultiplicationOverflow(T lhs, T rhs) noexcept {
     }
   } else {
     if (rhs < 0) {
-      if (rhs == -1)
-        return false;
       return lhs > min() / rhs;
     } else {
       return lhs > max() / rhs;
@@ -519,7 +522,7 @@ static constexpr bool DoesDivisionOverflow(T lhs, T rhs) noexcept {
   if (rhs == 0)
     return true;
   if (offset > 0) {
-    if (lhs == max() && rhs == -1)
+    if (rhs == -1 && lhs > -min())
       return true;
   } else if (offset < 0) {
     if (lhs == min() && rhs == -1)
